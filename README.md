@@ -1,8 +1,19 @@
-# dealer-settlement — 铺货代销对账 Skill
+# dealer-settlement — 铺货代销对账 Skill / Agent Plugin
 
-面向 AI Agent 的 **Agent Skill**（遵循 Anthropic SKILL.md 规范）：从经销合同建档，到月度对账出 8 表工作簿（对账单 / 库存差异 / 贴花费用），全程五层校验、缺失即阻断。
+[![CI](https://github.com/KentQi/dealer-settlement/actions/workflows/ci.yml/badge.svg)](https://github.com/KentQi/dealer-settlement/actions/workflows/ci.yml)
+[![Agent Plugins 1.0.0](https://img.shields.io/badge/Agent%20Plugins-1.0.0-informational)](https://agent-plugins.org/specification)
+[![Agent Skills](https://img.shields.io/badge/Agent%20Skills-specification-informational)](https://agentskills.io/specification)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-> 详细规程见 [SKILL.md](SKILL.md)。本仓库内所有主体、品名、条码、价格均为**演示数据（虚构）**。
+面向 AI Agent 的「铺货代销对账」作业包：从经销合同建档，到月度对账出 8 表工作簿（对账单 / 库存差异 / 贴花费用），全程五层校验、缺失即阻断。
+
+本仓库同时是：
+
+- **Agent Plugin**（根目录 `plugin.json` + `skills/`，遵循 [Agent Plugins 1.0.0](https://agent-plugins.org/specification)）——可移植包，插件客户端自动发现技能
+- **Agent Skill**（`skills/dealer-settlement/`，遵循 [Agent Skills](https://agentskills.io/specification)）——也可单独打包，放进只认 `SKILL.md` 的 harness 的 skills 根目录
+- **Claude Code 插件**（`.claude-plugin/` 兼容层）——支持 `claude plugin marketplace add` / `--plugin-dir`
+
+> 技能规程见 [skills/dealer-settlement/SKILL.md](skills/dealer-settlement/SKILL.md)。仓库内所有主体、品名、条码、价格均为**演示（虚构）数据**。
 
 ## 它做什么
 
@@ -14,33 +25,112 @@
 三份月度导出(挂账/销售/库存) + 主档 ──▶ 8 表对账工作簿 + 贴花费用计算 + 自检报告
 ```
 
-- **对账口径**：铺货代销、按实际动销结算；七条恒等式含时点回加与贴花
-- **贴花模块**：按「结算类动销数量 × 当期生效标准」计算，SCD2 生效区间，脏值/区间重叠/缺失一律阻断
+- **对账口径**：铺货代销、按实际动销结算；六条恒等式 + 贴花计算规则，含时点回加
+- **贴花模块**：按「结算类动销数量 × 当期生效标准」计算，SCD2 生效区间，脏值 / 区间重叠 / 缺失一律阻断
 - **五层校验**：入口必填 → 写库类型 → 计算自检 → 结构守卫 → 输出防覆盖；失败时 stderr 给中文原因与可复制的修复命令，stdout 保持 0 字节
 
-## 安装（任选其一）
+## 兼容的 harness
 
-| Harness | 安装位置 |
+Agent Plugins 1.0.0 的可移植核只定义 `plugin.json` + `skills/`（+ 可选 `mcp.json`），因此**任何实现该规范的客户端都能加载本仓库**。官方目前列出的兼容客户端包括：
+
+VS Code · Cursor · GitHub Copilot · ChatGPT & Codex · Kiro · Hermes Agent · OpenClaw · Grok Bot · NanoClaw · OpenHands · Perplexity Computer
+
+（完整清单与各客户端支持的组件：<https://agent-plugins.org/compatible-clients>）
+
+此外：
+
+| Harness | 加载方式 |
 |---|---|
-| Claude Code / Claude Desktop | `~/.claude/skills/dealer-settlement/` |
-| WorkBuddy | `~/.workbuddy/skills/dealer-settlement/` |
-| 其他兼容 SKILL.md 规范的 Agent | 其 skills 根目录下解压同名文件夹即可 |
+| 上述 Agent Plugins 客户端 | 把本仓库根目录作为插件包安装（含 `plugin.json` 与 `skills/`） |
+| Claude Code | `claude plugin marketplace add KentQi/dealer-settlement` 后 `claude plugin install dealer-settlement@dealer-settlement`；或本地 `claude --plugin-dir /path/to/dealer-settlement` |
+| 仅支持 Agent Skills 的 harness | 用 `make package` 生成 `dist/dealer-settlement.zip`，解压到该 harness 的 skills 根目录 |
+| WorkBuddy | `unzip dist/dealer-settlement.zip -d ~/.workbuddy/skills/` |
+
+技能内所有命令都用 `SKILL_DIR`（SKILL.md 所在目录）定位脚本，不依赖当前工作目录；同时给出 bash 与 PowerShell 写法（见 SKILL.md 第 0 节）。
+
+## 安装与快速开始
+
+### 作为插件安装（推荐）
 
 ```bash
-unzip dealer-settlement.zip -d ~/.claude/skills/   # 目录名必须保持 dealer-settlement
+# Claude Code：从本仓库安装插件
+claude plugin marketplace add KentQi/dealer-settlement
+claude plugin install dealer-settlement@dealer-settlement
+
+# 其他 Agent Plugins 客户端：把仓库根目录作为插件包加入其插件目录/市场
 ```
 
-依赖：`python3` + `pip install openpyxl xlrd pdfplumber`（xlrd ≥2.0 仅读 .xls；写 demo .xls 需 `xlwt`）。
-
-## 快速开始（demo 数据）
+### 作为单技能包安装
 
 ```bash
-python3 scripts/make_master.py /tmp/demo/客户/_主档.xlsx     # 生成演示主档（六表）
-# 准备三份导出后：
-export RECON_CFG=$(python3 scripts/load_master.py "/tmp/demo/客户/_主档.xlsx" --period 202610 --asof 2026-11-02)
-python3 scripts/recon_engine.py                              # 生成 8 表对账工作簿
+make package    # 生成 dist/dealer-settlement.zip，技能目录位于 zip 根
+unzip dist/dealer-settlement.zip -d ~/.claude/skills/
+
+# 或直接软链（目录名必须保持 dealer-settlement）
+ln -s "$PWD/skills/dealer-settlement" ~/.claude/skills/dealer-settlement
 ```
+
+### 跑一遍可复现的演示
+
+```bash
+pip install -r requirements.txt
+python3 examples/run_demo.py   # 生成演示主档与三份月度导出 → 跑通完整对账 → 自检
+```
+
+演示数据全部生成在临时目录，不会写入任何客户目录。真实业务使用见 SKILL.md「3. 工作流」。
+
+依赖：`python3`（3.9+）+ `pip install -r requirements.txt`（openpyxl / xlrd / pdfplumber）。技能脚本纯本地执行，不访问网络。
+
+## 仓库结构
+
+```text
+.
+├── plugin.json                     # Agent Plugins 1.0.0 可移植清单（封闭字段集）
+├── skills/dealer-settlement/       # 技能本体（可移植内容）
+│   ├── SKILL.md                    # frontmatter + 作业规程
+│   ├── scripts/                    # 建档、对账、确认页、校验脚本
+│   ├── references/                 # 客户主档设计、故障与回滚（按需加载）
+│   └── assets/                     # 主档模板
+├── examples/                       # 演示数据生成器 + 端到端演示（CI 使用）
+├── tools/validate.py               # 规范校验器（清单 / frontmatter / 引用）
+├── .claude-plugin/                 # Claude Code 原生插件与 marketplace 清单（兼容层）
+├── .github/workflows/ci.yml        # 多版本 Python CI
+├── Makefile                        # make check / demo / package
+└── requirements.txt
+```
+
+## 规范符合性
+
+| 规范 | 要求 | 本仓库 |
+|---|---|---|
+| Agent Plugins 1.0.0 | 根 `plugin.json`、封闭字段、`$schema` 固定值、name 规则 | ✅ 符合 |
+| Agent Plugins 1.0.0 | 技能位于固定位置 `skills/<name>/SKILL.md`（不递归发现） | ✅ `skills/dealer-settlement/` |
+| Agent Skills | frontmatter `name` 与目录同名、`description` ≤1024、规范字段集 | ✅ 见 [SKILL.md](skills/dealer-settlement/SKILL.md) |
+| Agent Plugins 1.0.0 | `mcp.json` 可选；无 MCP 服务器时缺失不算错误 | ✅ 未提供（本技能不需要） |
+
+`make check`（即 `python3 tools/validate.py` + 语法编译）会机器校验上述要求；CI 在 Python 3.9 / 3.12 / 3.13 上执行。
+
+## 开发
+
+| 命令 | 作用 |
+|---|---|
+| `make check` | 校验 `plugin.json`、`SKILL.md` 是否符合 Agent Plugins / Agent Skills 规范，并做语法编译 |
+| `make demo` | 生成演示数据并端到端跑通对账流程 |
+| `make package` | 构建 `dist/dealer-settlement.zip` |
+| `make clean` | 清理构建产物与 `__pycache__` |
+
+贡献前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 适配边界
 
-仅适用「铺货代销 + 按实际动销结算 + 月末对账」；买断/按发货结算/退货冲减/返利计价不在恒等式覆盖内。单据版式按某化妆品品牌经销商场景打磨，换行业需复核版式。
+仅适用「铺货代销 + 按实际动销结算 + 月末对账」；买断、按发货结算、退货冲减、返利/折让计价不在恒等式覆盖内。单据版式按某化妆品品牌经销商场景打磨，换行业需复核版式。
+
+## 数据与安全
+
+- 技能全程本地运行，不上传任何业务数据；导出、主档、确认记录都留在用户自己的目录。
+- 仓库内数据均为虚构演示值，**不要提交真实客户数据**（见 CONTRIBUTING 红线）。
+- 对账结果不构成审计意见；差异归因、税率、赔偿条款均需人工与双方书面确认。
+
+## 许可
+
+[MIT](LICENSE) © 2026 KentQi

@@ -36,7 +36,12 @@ def main():
     ap.add_argument("-o", "--out")
     a = ap.parse_args()
 
-    wb = openpyxl.load_workbook(a.master, data_only=True)
+    try:
+        wb = openpyxl.load_workbook(a.master, data_only=True)
+    except FileNotFoundError:
+        sys.exit(f"[找不到主档] {a.master}\n请确认路径，或先用 make_master.py 生成主档模板。")
+    except Exception as e:
+        sys.exit(f"[无法读取主档] {a.master}\n原因：{e}\n主档须为 .xlsx（.xls 请先另存为 .xlsx）。")
     _, parties = rows(wb, "主体")
     _, contracts = rows(wb, "合同")
     _, prices = rows(wb, "价格")
@@ -113,7 +118,9 @@ def main():
 
     md = "\n".join(L)
     out = a.out or os.path.join(os.path.dirname(os.path.abspath(a.master)), "_合同摘要.md")
-    open(out, "w", encoding="utf-8").write(md)
+    os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+    with open(out, "w", encoding="utf-8") as fh:
+        fh.write(md + "\n")
     print(md)
     print(f"\n[已写入] {out}")
 

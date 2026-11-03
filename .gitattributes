@@ -1,0 +1,9 @@
+# 统一换行，避免跨平台 diff 噪声
+* text=auto eol=lf
+
+# 二进制资源不做文本转换
+*.xlsx binary
+*.xls  binary
+*.png  binary
+*.jpg  binary
+*.pdf  binary

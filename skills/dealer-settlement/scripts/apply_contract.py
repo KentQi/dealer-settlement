@@ -11,18 +11,18 @@
 - 已有值且与新值不同 → 记为「冲突」，默认不覆盖；需显式 --force。
 - 幂等：同一份 JSON 重复执行不产生变化。
 """
-import sys, json, argparse, shutil, os, re, base64, hashlib, re
+import sys, json, argparse, shutil, os, re, base64, hashlib
 import openpyxl
 
 ROLE_COL = "角色"
 
 
 # ---- 列类型规则：写入前强校验，脏值拒绝而非转换 ----
-_NUM_COLS = {"供货价", "零售价", "贴花标准", "期初数量", "期初金额", "结算数量", "结算金额",
+_NUM_COLS = {"供货价", "零售价", "贴花标准", "贴花金额", "期初数量", "期初金额", "结算数量", "结算金额",
              "差异数量", "差异金额", "异议期(工作日)", "签回期(工作日)"}
 _DATE_COLS = {"起始", "终止", "生效起", "生效止", "数据基准日"}
 _ENUM_COLS = {"结算属性": ("结算类", "非结算类"),
-              "状态": ("待确认", "已确认", "已对账", "已付款"),
+              "状态": ("待确认", "已确认", "已对账", "已付款", "已签回", "已收款"),
               "结算方式": ("铺货代销", "买断", "代销"),
               "结算基数": ("实际动销", "签收", "发货")}
 _BAR_COLS = ("商品条码", "条码")
@@ -50,7 +50,7 @@ def validate_value(col, val):
     """返回 (ok, 规范值, 拒绝原因)。拒绝时不写入、不静默转换。校验器自身异常也按拒绝处理。"""
     s = str(val).strip()
     try:
-        rule = _match_rule(col, s if False else col)
+        rule = _match_rule(col, col)
         if rule == "num":
             if not re.fullmatch(r"[+-]?[0-9]+(\.[0-9]+)?", s):
                 return False, None, f"「{col}」须为半角数字，收到「{s}」（全角/文本一律拒绝）"
@@ -142,7 +142,12 @@ def main():
         print("[提醒] 该文件不含任何字段（fields 为空）。")
         print("       若这是从确认页下载的确认单，说明所有项都被取消了「采用」；")
         print("       若这是原始候选 JSON，请检查提取环节是否失败。")
-    wb = openpyxl.load_workbook(a.master)
+    try:
+        wb = openpyxl.load_workbook(a.master)
+    except FileNotFoundError:
+        sys.exit(f"[找不到主档] {a.master}\n请确认路径，或先用 make_master.py 生成主档模板。")
+    except Exception as e:
+        sys.exit(f"[无法读取主档] {a.master}\n原因：{e}\n主档须为 .xlsx（.xls 请先另存为 .xlsx）。")
 
     changes, conflicts, skipped, rejected = [], [], [], []
     if confirmed:
@@ -163,6 +168,10 @@ def main():
         ws = wb[sheet]
 
         if sheet == "主体":
+            if "." not in rest:
+                rejected.append((f.get("field"), tgt, val,
+                                 "主体字段 target 需形如 主体.甲方.名称（角色.列名）"))
+                continue
             role, col = rest.split(".", 1)
             row, headers = sheet_row(ws, ROLE_COL, role)
         else:
@@ -172,15 +181,17 @@ def main():
             # 字段自身需带主键说明，格式：列名@条码=xxx 或 列名@条码=xxx@生效起=yyyy-mm-dd
             if sheet == "合同" and "合同编号" in headers:
                 ci = headers.index("合同编号") + 1
-                want = str(val).strip() if rest == "合同编号" else None
-                if want:
-                    for r2 in range(2, ws.max_row + 1):
-                        if str(ws.cell(row=r2, column=ci).value).strip() == want:
-                            row = r2; break
-                if row == 2 and rest != "合同编号":
-                    for r2 in range(2, ws.max_row + 1):
-                        if str(ws.cell(row=r2, column=ci).value or "").strip():
-                            row = r2; break
+                if rest == "合同编号":
+                    want = str(val).strip()
+                    row = next((r2 for r2 in range(2, ws.max_row + 1)
+                                if str(ws.cell(row=r2, column=ci).value or "").strip() == want), None)
+                    if row is None:   # 新合同编号：追加一行，绝不覆盖上一份合同
+                        used = [r2 for r2 in range(2, ws.max_row + 1)
+                                if str(ws.cell(row=r2, column=ci).value or "").strip()]
+                        row = (max(used) if used else 1) + 1
+                else:
+                    row = next((r2 for r2 in range(2, ws.max_row + 1)
+                                if str(ws.cell(row=r2, column=ci).value or "").strip()), 2)
             elif sheet in ("价格", "贴花", "SKU"):
                 keys = {}          # 从 target 解析 @主键=值
                 base = rest
@@ -296,7 +307,8 @@ def main():
                 if len(raw) > 25 * 1024 * 1024:
                     print(f"⚠ 附件「{name}」超过 25MB，已跳过"); continue
                 fp = os.path.join(sub, f"{i:02d}_{name}")
-                open(fp, "wb").write(raw)
+                with open(fp, "wb") as fh:
+                    fh.write(raw)
                 at["saved_as"] = os.path.relpath(fp, root)
                 at["sha256"] = hashlib.sha256(raw).hexdigest()
                 at["bytes"] = len(raw)
@@ -305,14 +317,16 @@ def main():
             for sp, sz, h in saved:
                 print(f"   {os.path.basename(sp)}　{sz:,} bytes　sha256:{h}…")
 
-        json.dump(arc_data, open(arc, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+        with open(arc, "w", encoding="utf-8") as fh:
+            json.dump(arc_data, fh, ensure_ascii=False, indent=2)
         print(f"确认单已归档：{os.path.relpath(arc, root)}")
 
     import datetime as _dt2
     bdir = os.path.join(os.path.dirname(os.path.abspath(a.master)), "_备份")
     os.makedirs(bdir, exist_ok=True)
-    backup = os.path.join(bdir, f"{os.path.splitext(os.path.basename(a.master))[0]}_"
-                                f"{_dt2.datetime.now():%Y%m%d_%H%M%S_%f}".replace("%f", "")[:-1] + ".xlsx")
+    _now = _dt2.datetime.now()
+    _stamp = _now.strftime("%Y%m%d_%H%M%S_") + f"{_now.microsecond // 1000:03d}"   # 毫秒时间戳
+    backup = os.path.join(bdir, f"{os.path.splitext(os.path.basename(a.master))[0]}_{_stamp}.xlsx")
     _n3 = 2
     while os.path.exists(backup):
         backup = backup[:-5] + f"_{_n3}.xlsx"; _n3 += 1
@@ -320,8 +334,19 @@ def main():
     for t, c, v, cell in changes + (conflicts if a.force else []):
         cell.value = v
     _tmp = a.master + ".tmp.xlsx"
-    wb.save(_tmp)
-    os.replace(_tmp, a.master)
+    try:
+        wb.save(_tmp)
+        os.replace(_tmp, a.master)
+    except PermissionError as e:
+        if os.path.exists(_tmp):
+            os.remove(_tmp)
+        sys.exit(f"[写入失败] {a.master}\n文件可能正被 Excel 打开，请关闭后重试。"
+                 f"\n原文件未受影响；本次改动前的备份：_备份/{os.path.basename(backup)}\n原始错误：{e}")
+    except Exception as e:
+        if os.path.exists(_tmp):
+            os.remove(_tmp)
+        sys.exit(f"[写入失败] {a.master}\n磁盘空间不足或路径不可写，原文件未受影响。"
+                 f"\n本次改动前的备份：_备份/{os.path.basename(backup)}\n原始错误：{e}")
     print(f"\n已写入 {len(changes) + (len(conflicts) if a.force else 0)} 项；原文件备份于 _备份/{os.path.basename(backup)}")
 
 

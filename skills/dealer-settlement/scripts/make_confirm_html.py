@@ -16,7 +16,14 @@ def load_master_values(path):
     if not os.path.exists(path):
         return out
     wb = openpyxl.load_workbook(path, data_only=True)
+    try:
+        return _load_master_values(wb)
+    finally:
+        wb.close()
 
+
+def _load_master_values(wb):
+    out = {}
     if "主体" in wb.sheetnames:
         ws = wb["主体"]
         headers = [c.value for c in ws[1]]
@@ -664,7 +671,16 @@ def main():
     ap.add_argument("-o", "--out")
     a = ap.parse_args()
 
-    cand = json.load(open(a.candidate, encoding="utf-8"))
+    try:
+        with open(a.candidate, encoding="utf-8") as fh:
+            cand = json.load(fh)
+    except FileNotFoundError:
+        sys.exit(f"[找不到文件] {a.candidate}\n请确认候选 JSON 路径（extract_contract.py 的输出）。")
+    except json.JSONDecodeError as e:
+        sys.exit(f"[JSON 解析失败] {a.candidate}\n第 {e.lineno} 行第 {e.colno} 列：{e.msg}\n"
+                 f"多为文件被截断或手工编辑出错。")
+    if not isinstance(cand, dict):
+        sys.exit(f"[格式错误] {a.candidate}\n候选 JSON 顶层必须是对象（含 fields 数组）。")
     master = load_master_values(a.master)
     rows = build_rows(cand, master)
 
@@ -690,7 +706,9 @@ def main():
 
     out = a.out or os.path.join(os.path.dirname(os.path.abspath(a.master)),
                                 f"_确认页_{datetime.date.today():%Y%m%d}.html")
-    open(out, "w", encoding="utf-8").write(page)
+    os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+    with open(out, "w", encoding="utf-8") as fh:
+        fh.write(page)
     cnt = {}
     for r in rows:
         cnt[r["status"]] = cnt.get(r["status"], 0) + 1

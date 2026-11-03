@@ -1,6 +1,6 @@
 """从合同文件抽取主档所需字段，输出候选 JSON（不写库）。
 
-支持 .docx / .pdf / .xlsx / .txt。仅做「候选提取 + 证据留痕」，最终取值由人确认。
+支持 .docx / .pdf / .xlsx / .xlsm / .txt / .md。仅做「候选提取 + 证据留痕」，最终取值由人确认。
 
 用法：
     python3 extract_contract.py <合同文件> [-o 输出.json]
@@ -12,8 +12,12 @@ NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 
 
 def text_of_docx(path):
-    with zipfile.ZipFile(path) as z:
-        xml = z.read("word/document.xml").decode("utf-8", "ignore")
+    try:
+        with zipfile.ZipFile(path) as z:
+            xml = z.read("word/document.xml").decode("utf-8", "ignore")
+    except (zipfile.BadZipFile, KeyError) as e:
+        raise SystemExit(f"[无法读取] {path}\n不是有效的 .docx（缺少 word/document.xml 或已损坏）：{e}\n"
+                         f"请用 Word 另存为 .docx 后重试。")
     root = ET.fromstring(xml)
     lines = []
     for p in root.iter(NS + "p"):
@@ -49,13 +53,16 @@ def text_of_pdf(path):
 def text_of_xlsx(path):
     import openpyxl
     wb = openpyxl.load_workbook(path, data_only=True)
-    lines = []
-    for ws in wb.worksheets:
-        for row in ws.iter_rows(values_only=True):
-            cells = [str(v).strip() for v in row if v is not None and str(v).strip()]
-            if cells:
-                lines.append(" | ".join(cells))
-    return lines
+    try:
+        lines = []
+        for ws in wb.worksheets:
+            for row in ws.iter_rows(values_only=True):
+                cells = [str(v).strip() for v in row if v is not None and str(v).strip()]
+                if cells:
+                    lines.append(" | ".join(cells))
+        return lines
+    finally:
+        wb.close()
 
 
 def load_lines(path):
@@ -67,7 +74,13 @@ def load_lines(path):
     if ext in (".xlsx", ".xlsm"):
         return text_of_xlsx(path)
     if ext in (".txt", ".md"):
-        return [l.strip() for l in open(path, encoding="utf-8") if l.strip()]
+        for enc in ("utf-8-sig", "gb18030"):
+            try:
+                with open(path, encoding=enc) as fh:
+                    return [line.strip() for line in fh if line.strip()]
+            except UnicodeDecodeError:
+                continue
+        raise SystemExit(f"[编码无法识别] {path}\n既不是 UTF-8 也不是 GB18030，请转码后重试。")
     raise SystemExit(f"不支持的格式 {ext}；.doc/.wps 请先另存为 .docx")
 
 
@@ -94,14 +107,23 @@ def block_of(joined, start_kw, end_kws, fallback_len=800):
 
 
 def extract(path):
+    global PDF_PAGES
+    PDF_PAGES = None          # 避免上一次解析 PDF 的页数污染本次 needs_ocr 判断
+    if not os.path.exists(path):
+        raise SystemExit(f"[找不到合同文件] {path}\n请确认路径（支持 .docx/.pdf/.xlsx/.xlsm/.txt/.md）。")
     lines = load_lines(path)
     joined = "\n".join(lines)
     chars = len(joined.strip())
     if len(lines) < 15 or chars < 300:
-        msg = (f"\n[很可能不是文本版] 仅解析到 {len(lines)} 行 / {chars} 字。\n"
-               f"多为扫描件或图片型 PDF，没有文本层，正则无法提取。\n"
-               f"建议：① 取得可复制的电子版合同；② 或对 PDF 做 OCR 后再跑；\n"
-               f"      ③ 或直接按确认页手工填写主档。\n")
+        ext = os.path.splitext(path)[1].lower()
+        if ext in (".pdf", ".docx"):
+            msg = (f"\n[很可能不是文本版] 仅解析到 {len(lines)} 行 / {chars} 字。\n"
+                   f"多为扫描件或图片型 PDF，没有文本层，正则无法提取。\n"
+                   f"建议：① 取得可复制的电子版合同；② 或对 PDF 做 OCR 后再跑；\n"
+                   f"      ③ 或直接按确认页手工填写主档。\n")
+        else:
+            msg = (f"\n[提示] 仅解析到 {len(lines)} 行 / {chars} 字，内容可能不完整；"
+                   f"请核对文本格式（表格型合同建议提供 .docx/.xlsx 原件）。\n")
         print(msg, file=sys.stderr)
     out = []
 
@@ -231,7 +253,10 @@ def main():
     res = extract(a.contract)
     js = json.dumps(res, ensure_ascii=False, indent=2)
     if a.out:
-        open(a.out, "w", encoding="utf-8").write(js)
+        out_dir = os.path.dirname(os.path.abspath(a.out))
+        os.makedirs(out_dir, exist_ok=True)
+        with open(a.out, "w", encoding="utf-8") as fh:
+            fh.write(js + "\n")
         print(f"已写入 {a.out}")
     print(js)
 

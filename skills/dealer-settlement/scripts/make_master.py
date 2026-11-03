@@ -1,8 +1,10 @@
 """生成客户主档模板 _主档.xlsx（六张表：主体 / 合同 / 价格 / SKU / 期间 / 贴花）。
 
 用法：
-    python3 make_master.py <输出路径>
-默认输出到同目录 assets/客户主档-模板.xlsx。
+    python3 make_master.py <输出路径>      # 生成到指定路径，如 <客户根目录>/_主档.xlsx
+    python3 make_master.py --template      # 更新 skill 自带模板 assets/客户主档-模板.xlsx
+
+不带参数只打印用法并退出（不会生成任何文件），避免无意覆盖 skill 自带模板。
 示例行为演示数据（虚构），实际使用请整行替换为本客户信息。
 """
 import sys, os
@@ -79,8 +81,6 @@ SHEETS = {
     ),
 }
 
-
-import sys as _sys
 
 
 def build(path):
