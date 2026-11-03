@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires Python 3.9+ with openpyxl, xlrd (>=2.0, .xls read) and pdfplumber, plus read/write access to the customer workbook folder. Optional — Excel/WPS/LibreOffice to open generated .xlsx; OCR tooling only for scanned contracts. Commands are shown in bash with PowerShell equivalents for Windows.
 metadata:
   author: KentQi
-  version: "1.1.0"
+  version: "1.1.1"
 ---
 
 # 铺货代销全流程：建档 → 确认 → 对账 → 校验

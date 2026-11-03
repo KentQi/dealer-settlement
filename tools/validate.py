@@ -116,7 +116,7 @@ def check_plugin_manifest():
     return data
 
 
-def check_skill(skill_dir):
+def check_skill(skill_dir, plugin):
     name = os.path.basename(skill_dir)
     md_path = os.path.join(skill_dir, "SKILL.md")
     print("skills/" + name + "/SKILL.md")
@@ -164,6 +164,11 @@ def check_skill(skill_dir):
             for key, value in meta.items():
                 if not isinstance(value, str):
                     err("frontmatter：metadata." + str(key) + " 的值必须是字符串")
+            ver = meta.get("version")
+            if (plugin is not None and isinstance(ver, str) and plugin.get("version")
+                    and ver != plugin["version"]):
+                err("frontmatter：metadata.version（" + ver + "）与 plugin.json version（"
+                    + str(plugin["version"]) + "）不一致")
 
     ok("frontmatter 字段与命名规则")
 
@@ -322,7 +327,7 @@ def main():
                 warn("skills/" + entry + "：缺少 SKILL.md，客户端会跳过该目录")
                 continue
             found += 1
-            check_skill(skill_dir)
+            check_skill(skill_dir, plugin)
         if found == 0:
             err("skills/ 下没有发现任何技能（每个技能目录必须含 SKILL.md）")
 

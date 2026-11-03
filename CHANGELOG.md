@@ -5,6 +5,16 @@
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-11-03
+
+补齐 v1.1.0 发布后发现的 CI 与 Claude Code 兼容层问题；技能内容与 v1.1.0 相同。
+
+### Fixed
+
+- **Claude Code 兼容层**：`.claude-plugin/marketplace.json` 的插件 `source` 由 `"."` 恢复为 `"./"`（`claude plugin validate` 只接受 `./` 开头的相对路径）；`.claude-plugin/plugin.json` 移除 `displayName`（当前 Claude Code 校验器报 `Unrecognized key`）。已在隔离 HOME 下实测 `claude plugin marketplace add` + `claude plugin install` 成功。
+- **CI**：`actions/checkout`、`actions/setup-python`、`actions/upload-artifact` 升级到 v7（v4/v5 依赖已弃用的 Node 20）；Python 3.9 矩阵改为固定 `ubuntu-24.04`，因为 `ubuntu-latest`（26.04）没有 3.9 预编译包。
+- **规范校验器**：新增「`SKILL.md` 的 `metadata.version` 必须与 `plugin.json` 的 `version` 一致」校验，避免发布版本漂移。
+
 ## [1.1.0] - 2026-11-03
 
 本版本包含两项互相独立的改动：**打包层**从「单个 SKILL.md 仓库」升级为符合 Agent Plugins 1.0.0 的插件仓库；**脚本层**对 7 个 Python 脚本做了一轮审计式修复，并补齐可复现的演示与 CI。
