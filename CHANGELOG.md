@@ -5,6 +5,38 @@
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-03
+
+新增两项能力：**L6 LLM 语义复核（交付门禁）** 与 **结构漂移自动识别 + 映射确认（阶段 0）**。技能仍保持 L1–L5 确定性校验不变，新增层只增加门禁与适配能力，不替代任何既有校验。
+
+### Added
+
+- **L6 LLM 语义复核（交付门禁）**
+  - `make_review_packet.py`：生成 token 友好的复核包（关键数、逐 SKU / 贴花明细、文字断言、交叉引用、红线措辞扫描、合同条款、R1–R10 清单），取不到的数写 `null`+`warnings`，绝不臆造 0；除 `generated_at` 外确定性输出。
+  - `apply_review.py`：校验复核报告（哈希绑定、R1–R10 全覆盖、结论一致性：阻断⇒不通过 / 有警告⇒不得通过），`--apply` 写入工作簿第 9 张表 `08-复核记录` 并生成 `_复核记录/复核锁.json`（pre/post sha256），`--check` 交付前校验「复核有效」；复核后任何保存都会使锁失效，防止「审旧交新」；不通过时只归档报告、不写表、不得交付；重复执行幂等。
+  - 复核由**当前 harness 的 LLM** 执行（脚本不调用任何外部模型、不联网）；无文件写权限的 harness 可只输出报告 JSON 人工归档。
+  - 新增 `references/复核协议.md`：R1–R10 逐项操作手册、复核包/报告 JSON schema、判定矩阵、08 表与复核锁留痕、外部工作簿复核回退。
+  - 新增 `examples/review_demo.py`：8 表工作簿 → 复核包 → 08 表 → 复核锁 → 篡改失效 → 负例，约 4–5 秒。
+- **结构漂移自动识别与映射确认（阶段 0）**
+  - `inspect_schema.py`：只读探查主档/三份导出的表名、字段名、列顺序漂移，输出带置信度的映射建议（`proposed_mapping`）与 issue code（`SHEET_NAME_MISMATCH` / `FIELD_NAME_MISMATCH` / `FIELD_ORDER_DIFF` / `MULTI_CANDIDATE_SHEET` / `MISSING_FIELD` / `EXTRA_COLUMN`）。
+  - `apply_mapping.py`：默认 dry-run 逐项核对，`--write` **必须**带 `--confirmed-by <确认人>`（用户确认门禁），写 `_数据映射.json`（schema `dealer-settlement/data-mapping@1`）并归档 `_确认记录/`；`--fix-master [--fix-order]` 可按规范修复主档表名/列名/列序/表序（先 dry-run、再确认、毫秒备份、原子替换），**永不修改三份源导出**。
+  - 引擎消费映射：`load_master.py` 在客户根目录发现 `_数据映射.json` 时注入 `RECON_CFG['mapping']`；`recon_engine.py` 按映射选文件/工作表/表头行/列（显式优先于关键词启发），映射指向不存在的表/列时中文中止并指明是哪一项；**无映射时行为与 1.1.x 完全一致**（向后兼容）。
+  - 新增 `references/数据映射与结构探查.md`：漂移类型、探查结果解读、用户确认话术、映射 JSON 结构、主档修复规则。
+  - 新增 `examples/schema_demo.py`：制造 5 类漂移 → 自动识别 → 无映射中文中止 → 确认映射 → 带映射输出与基线逐单元格一致 → 主档修复+备份校验 → 负例，约 4 秒。
+
+### Changed
+
+- **工作流**：SKILL.md 新增「阶段 0 结构自检与映射确认（按需）」；阶段 C 拆为 C1 确定性校验 → C2 复核包 → C3 L6 复核（必过）→ C4 交付登记；§4 校验体系新增 L6 行，统一表述为「五层确定性校验（L1–L5）+ L6 LLM 语义复核」；§9 复核模式重写为「本次出账复核」与「外部工作簿复核」两种。
+- **frontmatter**：description 增加「复核 / 验收 / 审计口径 / 字段名·表名不一致 / 列顺序不同 / 表头识别 / 映射确认」等触发词；compatibility 补充 L6 依赖（harness LLM + 工作簿读写）与无写权限回退。
+- **文档**：SKILL.md 与 references 同步新能力（含 `_复核记录/`、`_数据映射.json`、`_确认记录/` 的落盘位置与回滚）。
+- **README / Makefile / CI**：`make demo` 现在运行三套端到端演示（对账 / L6 复核 / 结构映射）；CI 对应步骤改为 `make demo`。
+- 技能版本号 1.2.0（`plugin.json` / `.claude-plugin/plugin.json` / SKILL.md `metadata.version` 三处同步，校验器强制一致）。
+
+### Fixed
+
+- 文档与实现一致性校正：复核包 `figures.period_end`、`period` 为 `{start,end}` 对象（非 `"202610"`）、`--check` 可省略报告路径、`--report-dir` 同时决定报告与复核锁位置、`--apply` 不通过返回 1 而默认 dry-run 返回 0。
+- 映射「哈希绑定」表述改为与实际一致：探查报告记录当次文件 sha256 供留痕，`apply_mapping` 不做强制哈希比对（换文件需重新探查）。
+
 ## [1.1.1] - 2026-11-03
 
 补齐 v1.1.0 发布后发现的 CI 与 Claude Code 兼容层问题；技能内容与 v1.1.0 相同。

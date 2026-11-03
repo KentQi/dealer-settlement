@@ -169,6 +169,162 @@ F_INV = SRC.get("inventory") or ""
 
 BASE = CFG["base_dir"]
 
+# ---------------- 结构映射（可选，向后兼容）----------------
+# load_master.py 在客户根目录发现 _数据映射.json 时会读入并放进 CFG["mapping"]。
+# 无 mapping 时本段全部不生效，引擎行为与旧版完全一致。
+_MAP = CFG.get("mapping") if isinstance(CFG.get("mapping"), dict) else None
+if CFG.get("mapping") is not None and _MAP is None:
+    _cfg_fail("RECON_CFG.mapping 必须是对象", ["mapping"])
+_SMAP, _MMAP = {}, {}
+if _MAP:
+    if _MAP.get("schema") not in (None, "dealer-settlement/data-mapping@1"):
+        _cfg_fail("RECON_CFG.mapping.schema 不支持：%r" % (_MAP.get("schema"),), ["mapping.schema"])
+    if isinstance(_MAP.get("sources"), dict):
+        _SMAP = _MAP["sources"]
+    if isinstance(_MAP.get("master"), dict):
+        _MMAP = _MAP["master"]
+    try:
+        from schema_common import find_column as _map_find_column
+    except Exception as _map_import_error:  # noqa: BLE001 - 依赖缺失时中文中止
+        _cfg_fail("读取 _数据映射.json 需要 schema_common.py（%s）" % _map_import_error,
+                  ["schema_common.py"])
+
+
+def _map_bail(detail):
+    """映射与真实文件不一致时中止：明确指出是哪一项，stdout 保持 0 字节。"""
+    sys.stderr.write("\n[映射错误] " + detail + "\n"
+                     "请核对 _数据映射.json（可先用 apply_mapping.py 做 dry-run 校验），"
+                     "未生成任何文件。\n")
+    raise SystemExit(1)
+
+
+def _src_entry(role):
+    entry = _SMAP.get(role)
+    if isinstance(entry, dict) and entry:
+        return entry
+    if role != "next_month":
+        return {}
+    for parent in ("inventory", "jia"):
+        parent_entry = _SMAP.get(parent)
+        if isinstance(parent_entry, dict) and isinstance(parent_entry.get("next_month"), dict):
+            return parent_entry["next_month"]
+    return {}
+
+
+def _src_label(role):
+    """映射项在错误信息里的可定位路径（next_month 可能挂在 inventory/jia 下）。"""
+    if role != "next_month":
+        return "sources." + role
+    for parent in ("inventory", "jia"):
+        parent_entry = _SMAP.get(parent)
+        if isinstance(parent_entry, dict) and isinstance(parent_entry.get("next_month"), dict):
+            return "sources.%s.next_month" % parent
+    return "sources.next_month"
+
+
+def _src_file(role, default_name):
+    """来源文件路径：映射 sources.<role>.file 优先，其次按关键词发现结果（旧行为）。"""
+    entry = _src_entry(role)
+    hint = entry.get("file")
+    if not hint:
+        return os.path.join(BASE, default_name)
+    hint = str(hint)
+    if os.path.isabs(hint):
+        candidates = [hint]
+    else:
+        candidates = [os.path.join(BASE, hint),
+                      os.path.join(os.path.dirname(BASE), hint),
+                      os.path.join(BASE, os.path.basename(hint)),
+                      os.path.join(os.path.dirname(BASE), os.path.basename(hint))]
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return candidate
+    return candidates[0]
+
+
+def _sheet_name_of(spec, names, role, path):
+    label = _src_label(role)
+    if isinstance(spec, int) and not isinstance(spec, bool):
+        if not 1 <= spec <= len(names):
+            _map_bail("%s.sheet 指定第 %r 张工作表，但文件 %s 只有 %d 张：%s"
+                      % (label, spec, path, len(names), names))
+        return names[spec - 1]
+    name = str(spec)
+    if name not in names:
+        _map_bail("%s.sheet 指定的工作表「%s」在文件 %s 中不存在；实际工作表：%s"
+                  % (label, name, path, names))
+    return name
+
+
+def _src_sheet(workbook, role, path, keys, exclude=()):
+    entry = _src_entry(role)
+    spec = entry.get("sheet")
+    if spec in (None, ""):
+        return _pick_sheet(workbook, keys, exclude)
+    name = _sheet_name_of(spec, workbook.sheetnames, role, path)
+    return workbook[name], name
+
+
+def _check_header_row(header_row, role, max_rows):
+    label = _src_label(role)
+    if isinstance(header_row, bool) or not isinstance(header_row, int) or header_row < 1:
+        _map_bail("%s.header_row 必须是大于等于 1 的整数（Excel 行号），当前 %r"
+                  % (label, header_row))
+    if header_row > max_rows:
+        _map_bail("%s.header_row=%d 超出源表行数 %d" % (label, header_row, max_rows))
+    return header_row
+
+
+def _src_header(worksheet, role, path, keys, max_scan=6):
+    entry = _src_entry(role)
+    header_row = entry.get("header_row")
+    if header_row in (None, ""):
+        return _find_header(worksheet, keys, max_scan)
+    header_row = _check_header_row(header_row, role, worksheet.max_row)
+    values = [worksheet.cell(row=header_row, column=column).value
+              for column in range(1, worksheet.max_column + 1)]
+    return header_row, values
+
+
+def _src_header_rows(matrix, role, keys, max_scan=6):
+    entry = _src_entry(role)
+    header_row = entry.get("header_row")
+    if header_row in (None, ""):
+        return _find_header_rows(matrix, keys, max_scan)
+    header_row = _check_header_row(header_row, role, len(matrix))
+    return header_row - 1, list(matrix[header_row - 1])
+
+
+def _src_col(role, field, headers, keys, default, label=""):
+    entry = _src_entry(role)
+    columns = entry.get("columns")
+    if not isinstance(columns, dict) or field not in columns:
+        return _col(headers, keys, default, label)
+    index = _map_find_column(headers, columns[field])
+    if index is None:
+        actual = [str(value).strip() for value in headers
+                  if value is not None and str(value).strip()]
+        _map_bail("%s.columns.%s 指向的列 %r 在工作表表头中不存在；实际表头：%s"
+                  % (_src_label(role), field, columns[field], actual))
+    return index
+
+
+_MASTER_SHEET_ALIAS = {}
+if _MAP:
+    _declared_sheets = _MMAP.get("sheets") if isinstance(_MMAP.get("sheets"), dict) else {}
+    _MASTER_SHEET_ALIAS = {str(canonical): str(actual)
+                           for actual, canonical in _declared_sheets.items()}
+
+
+def _master_sheet(name):
+    """主档工作表名：映射 master.sheets 声明了改名时用实际名，否则用规范名（旧行为）。"""
+    return _MASTER_SHEET_ALIAS.get(name, name) if _MAP else name
+
+
+_P_JIA = _src_file("jia", F_JIA)
+_P_OCT = _src_file("sales", F_OCT)
+_P_INV = _src_file("inventory", F_INV)
+
 OUT = CFG.get("out_file") or os.path.join(
     BASE, _PD.get("out_name") or f"{_d_end.year}{_d_end.month:02d}铺货代销对账.xlsx")
 
@@ -342,13 +498,19 @@ def _num_val(value, ctx):
     return f
 
 
-def _read_matrix(path):
-    """把源文件首个工作表读成二维列表：.xlsx/.xlsm 用 openpyxl，.xls 用 xlrd（按扩展名分派）。"""
+def _read_matrix(path, sheet=None, role="jia"):
+    """把源文件读成二维列表：.xlsx/.xlsm 用 openpyxl，.xls 用 xlrd（按扩展名分派）。
+
+    sheet 为映射显式指定的工作表名 / 序号（1 基）；为 None 时沿用旧行为（第一张工作表）。
+    """
     ext = os.path.splitext(path)[1].lower()
     if ext in (".xlsx", ".xlsm"):
         wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
         try:
-            ws = wb.worksheets[0]
+            if sheet in (None, ""):
+                ws = wb.worksheets[0]
+            else:
+                ws = wb[_sheet_name_of(sheet, wb.sheetnames, role, path)]
             return [list(r) for r in ws.iter_rows(values_only=True)]
         finally:
             wb.close()
@@ -359,7 +521,10 @@ def _read_matrix(path):
             raise SystemExit("[缺少依赖] 读取 .xls 需要 xlrd（python3 -m pip install xlrd）；"
                              "或请甲方将挂账表另存为 .xlsx 后重试。")
         wb = xlrd.open_workbook(path)
-        sh = wb.sheet_by_index(0)
+        if sheet in (None, ""):
+            sh = wb.sheet_by_index(0)
+        else:
+            sh = wb.sheet_by_name(_sheet_name_of(sheet, wb.sheet_names(), role, path))
         return [[sh.cell_value(r, c) for c in range(sh.ncols)] for r in range(sh.nrows)]
     raise SystemExit(f"[中止] 不支持的源文件格式：{path}（仅支持 .xls / .xlsx / .xlsm）")
 
@@ -428,17 +593,17 @@ def _require(path):
             f"目录 {BASE} 下现有 Excel：{cands or '（无）'}\n"
             f"请核对文件名，或在 RECON_CFG 的 sources 中指定。")
 
-for _p in (os.path.join(BASE, F_JIA), os.path.join(BASE, F_OCT), os.path.join(BASE, F_INV)):
+for _p in (_P_JIA, _P_OCT, _P_INV):
     _require(_p)
 
-# ---------- 甲方挂账（.xls / .xlsx，按表头关键词定位列）----------
-_jia_mat = _read_matrix(os.path.join(BASE, F_JIA))
-_hr0, _h0 = _find_header_rows(_jia_mat, ["商品名称", "未结算数量", "未结算金额", "单价"])
-c_name = _col(_h0, ["商品", "名称", "品名"], 0, label="甲方挂账·品名列")
-c_price = _col(_h0, ["单价", "供货价"], 1, label="甲方挂账·单价列")
-c_amt = _col(_h0, ["未结算金额", "金额"], 2, label="甲方挂账·金额列")
-c_qty = _col(_h0, ["未结算数量", "数量"], 3, label="甲方挂账·数量列")
-c_init = _col(_h0, ["初始数量", "初始"], c_qty)
+# ---------- 甲方挂账（.xls / .xlsx，按表头关键词定位列；有映射时按映射）----------
+_jia_mat = _read_matrix(_P_JIA, sheet=_src_entry("jia").get("sheet"), role="jia")
+_hr0, _h0 = _src_header_rows(_jia_mat, "jia", ["商品名称", "未结算数量", "未结算金额", "单价"])
+c_name = _src_col("jia", "name", _h0, ["商品", "名称", "品名"], 0, label="甲方挂账·品名列")
+c_price = _src_col("jia", "price", _h0, ["单价", "供货价"], 1, label="甲方挂账·单价列")
+c_amt = _src_col("jia", "amount", _h0, ["未结算金额", "金额"], 2, label="甲方挂账·金额列")
+c_qty = _src_col("jia", "qty", _h0, ["未结算数量", "数量"], 3, label="甲方挂账·数量列")
+c_init = _src_col("jia", "init", _h0, ["初始数量", "初始"], c_qty)
 
 _jia_raw = []
 for _ri, r in enumerate(_jia_mat[_hr0 + 1:], _hr0 + 2):
@@ -465,17 +630,18 @@ for _x in _jia_raw:
     else:
         _jm[_k] = _x; jia.append(_x)
 
-# ---------- 乙方库存（表名与列均按关键词识别）----------
-wb1 = openpyxl.load_workbook(os.path.join(BASE, F_INV), data_only=True)
-ws_inv, inv_sheet_name = _pick_sheet(wb1, ["库存"], exclude=("销售",))
-_hr, _hinv = _find_header(ws_inv, ["商品名称", "库存"])
-k_name = _col(_hinv, ["商品名称", "名称", "品名"], 0, label="库存表·品名列")
-k_bar = _col(_hinv, ["条码", "编码"], 1, label="库存表·条码列")
-k_spec = _col(_hinv, ["规格"], 2)
-k_cat = _col(_hinv, ["分类"], 3)
-k_qty = _col(_hinv, ["库存", "数量"], 4, label="库存表·库存列")
-k_retail = _col(_hinv, ["销售价", "零售价"], 5)
-k_brand = _col(_hinv, ["品牌"], None)
+# ---------- 乙方库存（表名与列均按关键词识别；有映射时按映射）----------
+wb1 = openpyxl.load_workbook(_P_INV, data_only=True)
+ws_inv, inv_sheet_name = _src_sheet(wb1, "inventory", _P_INV, ["库存"], exclude=("销售",))
+_hr, _hinv = _src_header(ws_inv, "inventory", _P_INV, ["商品名称", "库存"])
+k_name = _src_col("inventory", "name", _hinv, ["商品名称", "名称", "品名"], 0,
+                  label="库存表·品名列")
+k_bar = _src_col("inventory", "bar", _hinv, ["条码", "编码"], 1, label="库存表·条码列")
+k_spec = _src_col("inventory", "spec", _hinv, ["规格"], 2)
+k_cat = _src_col("inventory", "cat", _hinv, ["分类"], 3)
+k_qty = _src_col("inventory", "qty", _hinv, ["库存", "数量"], 4, label="库存表·库存列")
+k_retail = _src_col("inventory", "retail", _hinv, ["销售价", "零售价"], 5)
+k_brand = _src_col("inventory", "brand", _hinv, ["品牌"], None)
 
 inv = []
 for _ri, r in enumerate(ws_inv.iter_rows(min_row=_hr + 1, values_only=True), _hr + 1):
@@ -526,15 +692,16 @@ _nov_skip = []
 if not ADD_BACK:
     print(f"库存导出日 {ASOF} 不晚于期末 {P_END}，无需回加，跳过次月销售表")
 else:
-    ws_nov, nov_sheet_name = _pick_sheet(wb1, ["销售"], exclude=("库存",))
+    ws_nov, nov_sheet_name = _src_sheet(wb1, "next_month", _P_INV, ["销售"], exclude=("库存",))
     _t = ws_nov.title or ""
     if str(_d_next.month) not in _t and "月" in _t:
         print(f"⚠ 回加工作表「{_t}」与推算区间 {_d_next.month} 月不一致，请核对库存导出日")
 if ADD_BACK:
-    _hr2, _hnov = _find_header(ws_nov, ["商品名称", "销售数量"])
-    n_name = _col(_hnov, ["商品名称", "名称"], 0)
-    n_bar = _col(_hnov, ["条码", "编码"], 1)
-    n_num = _col(_hnov, ["销售数量", "数量", "销量"], 3, label="次月销售表·销售数量列")
+    _hr2, _hnov = _src_header(ws_nov, "next_month", _P_INV, ["商品名称", "销售数量"])
+    n_name = _src_col("next_month", "name", _hnov, ["商品名称", "名称"], 0)
+    n_bar = _src_col("next_month", "bar", _hnov, ["条码", "编码"], 1)
+    n_num = _src_col("next_month", "qty", _hnov, ["销售数量", "数量", "销量"], 3,
+                     label="次月销售表·销售数量列")
 else:
     _hr2, _hnov, n_name, n_bar, n_num = 1, [], 0, 1, 3
 nov = defaultdict(int)
@@ -560,24 +727,26 @@ if _nov_skip:
           f"{'、'.join(_nov_skip[:5])}）；请核对是否影响回加")
 
 # ---------- 乙方当期销售流水 ----------
-wb2 = openpyxl.load_workbook(os.path.join(BASE, F_OCT), data_only=True)
-ws_oct, oct_sheet_name = _pick_sheet(wb2, [str(P_END)[5:7], "月"], exclude=("库存",))
+wb2 = openpyxl.load_workbook(_P_OCT, data_only=True)
+ws_oct, oct_sheet_name = _src_sheet(wb2, "sales", _P_OCT, [str(P_END)[5:7], "月"],
+                                   exclude=("库存",))
 _m_end = _date.fromisoformat(str(P_END)[:10]).month
 _m_hit = re.search(r"(\d{1,2})\s*月", ws_oct.title or "")
 if _m_hit and int(_m_hit.group(1)) != _m_end:
     _bail(f"销售工作表是「{ws_oct.title}」，但本次期间是 {_m_end} 月，疑似期间与源文件不匹配。"
           f"请把对应月份的销售数据放到本目录，或在配置中显式指定 sources.sales")
 
-_hr3, _hoct = _find_header(ws_oct, ["商品名称", "销售数量"])
-o_id = _col(_hoct, ["流水号", "单号"], 0)
-o_time = _col(_hoct, ["销售时间", "时间", "日期"], 1)
-o_store = _col(_hoct, ["门店", "店铺", "网点"], 2)
-o_name = _col(_hoct, ["商品名称", "名称", "品名"], 3, label="销售流水·品名列")
-o_bar = _col(_hoct, ["条码", "编码"], 4, label="销售流水·条码列")
-o_spec = _col(_hoct, ["规格"], 5)
-o_unit = _col(_hoct, ["单位"], 6)
-o_num = _col(_hoct, ["销售数量", "数量", "销量"], 7, label="销售流水·数量列")
-o_brand = _col(_hoct, ["品牌"], 8)
+_hr3, _hoct = _src_header(ws_oct, "sales", _P_OCT, ["商品名称", "销售数量"])
+o_id = _src_col("sales", "serial", _hoct, ["流水号", "单号"], 0)
+o_time = _src_col("sales", "date", _hoct, ["销售时间", "时间", "日期"], 1)
+o_store = _src_col("sales", "store", _hoct, ["门店", "店铺", "网点"], 2)
+o_name = _src_col("sales", "name", _hoct, ["商品名称", "名称", "品名"], 3,
+                  label="销售流水·品名列")
+o_bar = _src_col("sales", "bar", _hoct, ["条码", "编码"], 4, label="销售流水·条码列")
+o_spec = _src_col("sales", "spec", _hoct, ["规格"], 5)
+o_unit = _src_col("sales", "unit", _hoct, ["单位"], 6)
+o_num = _src_col("sales", "qty", _hoct, ["销售数量", "数量", "销量"], 7, label="销售流水·数量列")
+o_brand = _src_col("sales", "brand", _hoct, ["品牌"], 8)
 
 detail = []
 oct_qty, oct_store = defaultdict(int), defaultdict(lambda: defaultdict(int))
@@ -634,8 +803,9 @@ _mp = CFG.get("master_path")
 if _mp and os.path.exists(_mp):
     try:
         _wb = openpyxl.load_workbook(_mp, data_only=True)
-        if "价格" in _wb.sheetnames:
-            _ws = _wb["价格"]
+        _price_sheet = _master_sheet("价格")
+        if _price_sheet in _wb.sheetnames:
+            _ws = _wb[_price_sheet]
             _h = [c.value for c in _ws[1]]
             def _c(k, d=0):
                 for i, x in enumerate(_h):
@@ -676,8 +846,9 @@ _mp2 = CFG.get("master_path")
 if _mp2 and os.path.exists(_mp2):
     try:
         _wb = openpyxl.load_workbook(_mp2, data_only=True)
-        if "SKU" in _wb.sheetnames:
-            _ws = _wb["SKU"]
+        _sku_sheet = _master_sheet("SKU")
+        if _sku_sheet in _wb.sheetnames:
+            _ws = _wb[_sku_sheet]
             _h = [c.value for c in _ws[1]]
             def _cc(k, d=None):
                 for i, x in enumerate(_h):

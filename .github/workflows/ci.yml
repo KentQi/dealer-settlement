@@ -47,8 +47,8 @@ jobs:
       - name: 语法编译检查
         run: python -m compileall -q skills examples tools
 
-      - name: 端到端演示（建档 → 对账 → 自检）
-        run: python examples/run_demo.py
+      - name: 端到端演示（对账 → L6 复核 → 结构映射）
+        run: make demo
 
       - name: 构建技能安装包
         run: make package

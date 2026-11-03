@@ -13,6 +13,8 @@
 - stdout 只输出一行 JSON 配置；所有告警/错误走 stderr（失败时 stdout 保持 0 字节）。
 - 合同条款（结算方式/结算基数/异议期/签回期/付款日）从主档「合同」表读取并传给引擎；
   读不到时引擎会显式标注「以合同为准」，不会静默套用固定文案。
+- 客户根目录存在 _数据映射.json（结构漂移经用户确认后的映射）时，读入并放进
+  RECON_CFG["mapping"] 交给引擎按映射取数；不存在时行为与旧版完全一致，映射损坏则中止。
 """
 import argparse
 import datetime
@@ -201,6 +203,25 @@ def main():
     if problems:
         print(f"[提示] 共 {len(problems)} 项主档信息不全，仍继续生成；请核对输出文件抬头。", file=sys.stderr)
 
+    # ---- 结构映射（可选）：客户根目录存在 _数据映射.json 时随 CFG 下传引擎 ----
+    # 不存在时行为与旧版完全一致；文件损坏时中文报错并 exit 1（stdout 保持 0 字节）。
+    mapping = None
+    mapping_file = os.path.join(root, "_数据映射.json")
+    if os.path.exists(mapping_file):
+        try:
+            with open(mapping_file, "r", encoding="utf-8-sig") as fh:
+                mapping = json.load(fh)
+        except (OSError, ValueError) as e:
+            _fail(f"[映射文件损坏] {mapping_file}\n原因：{e}\n"
+                  f"请修复该 JSON，或删除后按旧流程运行；未生成任何文件。")
+        if not isinstance(mapping, dict):
+            _fail(f"[映射文件损坏] {mapping_file}\n"
+                  f"顶层必须是 JSON 对象（schema 应为 dealer-settlement/data-mapping@1）。")
+        if mapping.get("schema") != "dealer-settlement/data-mapping@1":
+            _fail(f"[映射 schema 不支持] {mapping_file}\n"
+                  f"当前 {mapping.get('schema')!r}；要求 'dealer-settlement/data-mapping@1'。\n"
+                  f"请用 apply_mapping.py 重新生成/确认映射后重试。")
+
     cfg = {
         "base_dir": base,
         "master_path": os.path.abspath(a.master),
@@ -232,6 +253,8 @@ def main():
             "inventory": pick([("库存", None)], "乙方-库存.xlsx"),
         },
     }
+    if mapping is not None:
+        cfg["mapping"] = mapping
     if a.out:
         cfg["out_file"] = os.path.abspath(a.out)
     print(json.dumps(cfg, ensure_ascii=False))

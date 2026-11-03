@@ -1,14 +1,14 @@
 ---
 name: dealer-settlement
-description: 铺货代销（代销 / 铺货）对账作业包，覆盖三件事：① 从经销合同识别关键字段、生成 HTML 确认页、经人工逐项确认后写入客户主档（六表）；② 用客户主档 + 当期三份导出（甲方挂账、乙方销售流水、乙方库存）生成 8 表对账工作簿（对账单、库存差异表、贴花费用等）；③ 以五层校验保证数字可审计、缺失即阻断。当用户要求「识别合同 / 建客户档 / 做合同台账」「某月对账 / 算应结算金额 / 核对库存 / 出对账单 / 算贴花」或询问「怎么操作 / 需要准备什么材料」时使用。判据与校验通用，但单据版式与披露文案按「品牌方 × 经销商（示例）」场景打磨，换客户首次出账需复核版式。
+description: 铺货代销（代销 / 铺货）对账作业包，覆盖五件事：① 从经销合同识别关键字段、生成 HTML 确认页、经人工逐项确认后写入客户主档（六表）；② 用客户主档 + 当期三份导出（甲方挂账、乙方销售流水、乙方库存）生成 8 表对账工作簿；③ 五层确定性校验（L1–L5）保证数字可审计、缺失即阻断；④ L6 LLM 语义复核：交付前按 R1–R10 复核，结论与哈希锁写入工作簿 08-复核记录；⑤ 结构漂移识别与映射确认：表名 / 字段名 / 列顺序不一致时先探查、经用户逐项确认后生成 _数据映射.json。当用户要求「识别合同 / 建客户档 / 做合同台账」「某月对账 / 算应结算金额 / 核对库存 / 出对账单 / 算贴花」「复核本次出账 / 验收 / 按审计口径检查」或询问「怎么操作 / 需要准备什么材料」，以及提到「字段名不一致 / 表名不一致 / 列顺序不同 / 表头识别 / 映射确认」时使用。判据与校验通用，但单据版式与披露文案按「品牌方 × 经销商（示例）」场景打磨，换客户首次出账需复核版式。
 license: MIT
-compatibility: Requires Python 3.9+ with openpyxl, xlrd (>=2.0, .xls read) and pdfplumber, plus read/write access to the customer workbook folder. Optional — Excel/WPS/LibreOffice to open generated .xlsx; OCR tooling only for scanned contracts. Commands are shown in bash with PowerShell equivalents for Windows.
+compatibility: Requires Python 3.9+ with openpyxl, xlrd (>=2.0, .xls read) and pdfplumber, plus read/write access to the customer workbook folder. Optional — Excel/WPS/LibreOffice to open generated .xlsx; OCR tooling only for scanned contracts. L6 review runs in the harness LLM (scripts never call a model) and needs workbook read + file write; without write access, output the report JSON for manual archiving. Commands are shown in bash with PowerShell equivalents for Windows.
 metadata:
   author: KentQi
-  version: "1.1.1"
+  version: "1.2.0"
 ---
 
-# 铺货代销全流程：建档 → 确认 → 对账 → 校验
+# 铺货代销全流程：建档 → 确认 → 对账 → 校验 → 复核
 
 ## 0. 运行约定（跨 harness，先读）
 
@@ -27,6 +27,7 @@ metadata:
   - 文件展示 / 打开：有展示或打开能力 → 把生成的文件直接呈现给用户；否则给出**绝对路径**，让用户用浏览器（HTML）、Excel / WPS / LibreOffice（xlsx）手动打开。
   - 结构化提问 / 确认卡片：有且离散决策 ≤ 4 项 → 可用；否则在回复中逐项提问。合同字段确认默认走 HTML 确认页，**不依赖** harness 交互能力。
   - 本地文件读写：有读取能力 → 直接读；否则让用户提供路径或上传附件。
+  - LLM 语义复核：由**当前 harness 的模型**执行，脚本不调用任何外部模型；harness 无文件写权限时，至少输出复核报告 JSON 由用户归档（详见 [references/复核协议.md](references/复核协议.md)）。
   - 网络：脚本不联网；除首次 pip 安装依赖外无需网络。
 
 **Windows / PowerShell 等价写法**（以 B1 / B2 为例；其余命令同理：`python3` → `py -3`，路径分隔符可用反斜杠或正斜杠）：
@@ -42,6 +43,10 @@ py -3 "$SKILL_DIR\scripts\recon_engine.py"
 ## 工作流总览
 
 ```
+【阶段 0：结构自检（按需：首次接新客户 / 换 ERP / 引擎报表名·表头不识别时）】
+主档 + 三份导出 ──inspect_schema 探查──▶ 漂移与映射建议 ──用户逐项确认──▶ _数据映射.json
+（详见 references/数据映射与结构探查.md；确认前不写盘，永不改三份源导出）
+
 【一次性建档】
 合同原件 ──A1 抽取──▶ 候选字段 JSON ──A3 确认页(人工逐项确认)──▶ 确认单 JSON
                                                                        │
@@ -53,7 +58,7 @@ py -3 "$SKILL_DIR\scripts\recon_engine.py"
 三份月度导出 ──┐
 主档（六表）──┼─B1 生成配置──B2 引擎计算+自检──▶ 8 表对账工作簿
               │                                    │
-              └──────── B3 校验核对 ──▶ B4 交付 + 期间表登记
+              └── B3 确定性校验 ──▶ C3 L6 语义复核(R1–R10，必过) ──▶ B4 交付 + 期间表登记
 ```
 
 先判断当前在哪一段：
@@ -65,6 +70,8 @@ py -3 "$SKILL_DIR\scripts\recon_engine.py"
 | 合同 + 月度导出 | 先 A 后 B |
 | 说「主档有问题 / 补个客户 / 调价了 / 新品上架」 | A 的增量更新 |
 | 说「贴花变了 / 新政策表」 | 更新主档「贴花」表，再跑 B |
+| 引擎报「未找到含…的工作表」「数据表未找到含…的列」，或用户说「表名 / 表头 / 列顺序不一样」 | 先走**阶段 0**，再跑 B |
+| 要求「复核这个工作簿 / 验收 / 按审计口径检查」 | 按第 9 节：本次出账走 L6 协议；外部工作簿按 R1–R10 直查 |
 | 问「怎么操作 / 要准备什么」 | 按第 6 节「用户操作指导」引导，不要替用户做决定 |
 
 ## 1. 必要文件（输入清单）
@@ -123,6 +130,23 @@ py -3 "$SKILL_DIR\scripts\recon_engine.py"
 前两项由目录与文件名可推断一部分；后三项无变更即默认「无」。
 
 ## 3. 工作流
+
+### 阶段 0：结构自检与映射确认（按需触发，用户确认门禁）
+
+**触发**：首次接新客户 / 换 ERP；引擎报 `[中止] 未找到含…的工作表` 或 `[自检未通过] 数据表未找到含…的列`；用户说「表名 / 表头 / 列顺序不一样」。无漂移时直接跳过，不产生任何文件。
+
+**强制流程（用户确认不可跳过）**：
+
+1. **自动识别（只读）**：`python3 "$SKILL_DIR/scripts/inspect_schema.py" "<客户根目录>" --out /tmp/探查.json --md /tmp/探查.md`；
+2. **向用户展示**「实际名称 → 规范字段 / 置信度 / 待裁决项 / 影响」（表格化，话术模板见 [references/数据映射与结构探查.md](references/数据映射与结构探查.md)）；**低置信项必须逐项问，禁止代替用户决定**；
+3. 用户逐项裁决后生成 / 编辑映射 JSON（结构见同一 reference）；
+4. **预览**：`python3 "$SKILL_DIR/scripts/apply_mapping.py" "<客户根目录>" "<映射.json>"`（默认 dry-run，打印将写入的内容与影响）；
+5. **确认后落盘**：`python3 "$SKILL_DIR/scripts/apply_mapping.py" "<客户根目录>" "<映射.json>" --write --confirmed-by "<确认人>"` → 写 `_数据映射.json`，副本归档 `_确认记录/`；未经用户确认不得加 `--write`；
+6. 重跑 B1 / B2，引擎按映射取表与列。
+
+**主档修复（可选）**：表名 / 列名 / 顺序漂移也可先修主档——`python3 "$SKILL_DIR/scripts/apply_mapping.py" "<客户根目录>" "<映射.json>" --fix-master [--fix-order]` 先 dry-run，确认后加 `--write --confirmed-by`；写前自动备份到 `_备份/`（毫秒时间戳）。
+
+**铁律**：永不修改三份源导出（只写映射）；不得凭文件名 / 位置猜字段；映射确认 ≠ 数据正确性背书。
 
 ### 阶段 A：合同建档（一次性 + 增量）
 
@@ -187,15 +211,14 @@ Windows / PowerShell 见第 0 节；`--out` 属于 `load_master.py`，`recon_eng
 
 **输出（8 表）**：`00-对账说明` `01-对账单` `02-库存差异表` `03-源数据对照` `04-甲方挂账明细` `05-乙方销售汇总` `06-乙方库存明细` `07-乙方销售流水`。版式由脚本生成，不要手工重排。
 
-### 阶段 C（B3/B4）：校验与交付
+### 阶段 C（B3 / L6 / B4）：校验、复核与交付
 
-1. 核引擎 stderr 打印的自检行：「自检通过（残差 0.00）」；任何「⚠」都要向用户转述。
-2. 复算六个数：期初件数 / 金额、结算件数 / 金额、差异件数 / 金额（`_bail` 时 stderr 也会打出这六个数）。
-3. 断言：`结算金额 − 差异金额（带符号） + 次月已销货值 = 期初货值 − 期末库存货值`；贴花合计独立复算。引擎已对六条恒等式逐条显式校验（不用 `assert`，`python -O` 下也不会静默失效），失败时以 `[自检未通过] 数量恒等式不成立…` 中止。
-4. 向用户报告：应结算金额、贴花金额、差异件数与金额、差异集中的 SKU、数据覆盖期间（流水缺哪几天必须说）。
-5. 在主档 `期间` 表追加一行（期初 / 结算 / 差异 / 贴花 / 状态），作为下期衔接与审计索引。
+1. **C1 确定性校验（B3）**：核 stderr 自检行「自检通过（残差 0.00）」，任何「⚠」转述；复算六个数（期初 / 结算 / 差异的件数与金额）；断言 `结算金额 − 差异金额（带符号） + 次月已销货值 = 期初货值 − 期末库存货值`，贴花合计独立复算。引擎已对六条恒等式逐条显式校验（不用 `assert`，`python -O` 下也不会静默失效）。
+2. **C2 生成复核包**：`python3 "$SKILL_DIR/scripts/make_review_packet.py" "<工作簿.xlsx>" --master "<_主档.xlsx>" --out /tmp/复核包.json --md /tmp/复核包.md`。
+3. **C3 L6 LLM 语义复核（交付前必过）**：由**当前 harness 的 LLM** 按 [references/复核协议.md](references/复核协议.md) 的 R1–R10 逐项复核（脚本不调用外部模型），产出报告 JSON；`python3 "$SKILL_DIR/scripts/apply_review.py" "<工作簿.xlsx>" "<报告.json>" --packet /tmp/复核包.json --apply` 写入 `08-复核记录`（第 9 张表）并生成 `_复核记录/复核锁.json`。verdict 不通过 / 有阻断 finding → **不得交付**；复核后任何保存都会使锁失效，必须重评。
+4. **C4 交付与登记（B4）**：交付前跑 `python3 "$SKILL_DIR/scripts/apply_review.py" "<工作簿.xlsx>" --check` 确认「复核有效」；向用户报告应结算金额、贴花金额、差异件数与金额、差异集中的 SKU、数据覆盖期间（流水缺哪几天必须说）；展示 / 打开工作簿，并在主档 `期间` 表追加一行（期初 / 结算 / 差异 / 贴花 / 状态）。
 
-## 4. 校验体系（五层，最佳实践）
+## 4. 校验体系（五层确定性校验 L1–L5 + L6 LLM 语义复核）
 
 | 层 | 时点 | 校验什么 | 失败行为 |
 |---|---|---|---|
@@ -204,8 +227,9 @@ Windows / PowerShell 见第 0 节；`--out` 属于 `load_master.py`，`recon_eng
 | L3 计算自检 | 引擎计算中 | ① 明细合计=按条码汇总 ② 挂账源表=归一化后 ③ 结转残差=0 ④ 贴花合计独立复算 ⑤ 库存合计非 0；差异率 ≤ 30% 阈值 ⑥ 六条恒等式（3 条金额勾稽 + 3 条数量）逐条显式校验 | `_bail` 中止；stderr 先打出已算出的六个数，便于定位 |
 | L4 结构守卫 | 数据读入后 | 同条码多行挂账→中止（防动销双算）；库存按条码聚合；结算属性三态（空/未知→阻断，绝不默认为结算类）；销售表月份与期间不符→中止；销售流水缺条码、源表脏值（布尔 / 非数字 / 非有限）→中止 | 中止或聚合告警 |
 | L5 输出 | 保存前后 | 新建写 `[新建] <绝对路径>`；目标已存在默认写 `_v2` 不覆盖并标 `[覆盖→<新文件名>]`；显式 `overwrite: true` 才覆盖原文件（`[覆盖]`）；写入失败时提示原因且原文件未受影响 | 保护性改名或中止 |
+| L6 语义复核 | 交付前（B4 之前） | 按 R1–R10 逐项复核：六条恒等式、跨表合计、贴花独立复算、①–⑦ 结转、文字断言、交叉引用、口径披露、红线、合同条款、差异解释 | **不得交付**；修正后重新出账并重做 L6（复核锁绑定工作簿哈希，任何保存都会失效） |
 
-校验的铁律：**缺失即阻断，不做语义兜底**。空值不会被默认成「结算类」「0 件」「件」——凡是看起来正常的静默兜底，都制造过不可发现的数据错误。
+校验的铁律：**缺失即阻断，不做语义兜底**。空值不会被默认成「结算类」「0 件」「件」——凡是看起来正常的静默兜底，都制造过不可发现的数据错误。L6 的铁律：**结论必须来自实算数字与原文**，不允许凭印象；**不通过不得交付**。
 
 ## 5. 贴花模块（销售奖励）
 
@@ -302,13 +326,20 @@ Windows / PowerShell 见第 0 节；`--out` 属于 `load_master.py`，`recon_eng
 
 ## 9. 复核模式
 
-用户要求「检查这个文件有没有问题」时：
+复核分两种，共用 [references/复核协议.md](references/复核协议.md) 的 R1–R10 清单与报告 schema：
+
+**A. 本次出账复核（L6，交付前必过）**
+
+1. 生成复核包：`python3 "$SKILL_DIR/scripts/make_review_packet.py" "<工作簿.xlsx>" --master "<_主档.xlsx>" --out /tmp/复核包.json --md /tmp/复核包.md`（含哈希、figures、claims、cross_refs、redline_scan 等结构化底稿）。
+2. 由**当前 harness 的 LLM** 按 [references/复核协议.md](references/复核协议.md) 逐项复核并写出报告 JSON（schema `dealer-settlement/review-report@1`；脚本不调用外部模型）。
+3. 落盘：`python3 "$SKILL_DIR/scripts/apply_review.py" "<工作簿.xlsx>" "<报告.json>" --packet /tmp/复核包.json --apply` → 写 `08-复核记录` + `_复核记录/复核锁.json`；交付前 `--check` 必须返回「复核有效」。
+4. 不通过 / 有阻断 → 不得交付；修正后重新出账、重新生成复核包并**重做 L6**（任何保存都会使复核锁失效）。
+
+**B. 外部工作簿复核（无复核包时，按清单直查）**
 
 1. 用 `openpyxl` 读全部单元格与合并区，读公式而非缓存值（`data_only=False`）。
-2. 逐表核合计 = 明细之和（差异类合计按**绝对值**比对，正负号看行内符号）；核跨表同一指标一致；核恒等式逐式成立；贴花合计独立复算。
-3. 核交叉引用指向（「详见附表 02」是否真有该数）。
-4. 核文字断言与数据是否匹配（「10 个相符」是否真是 10 行）。
-5. 只报**实算能证明**的问题，给单元格地址与两个具体数字对比。
+2. 按 [references/复核协议.md](references/复核协议.md) 的 R1–R10 逐项核：逐表合计 = 明细之和（差异类按**绝对值**比对，正负号看行内符号）、跨表同一指标一致、恒等式逐式成立、贴花独立复算、①–⑦ 结转、交叉引用真实存在、文字断言与数据匹配、口径披露完整、红线、合同条款、差异解释。
+3. 只报**实算能证明**的问题，给单元格地址与两个具体数字对比；输出同 schema 的报告 JSON 便于留档（无写权限时交给用户归档）。
 
 ## 10. 故障与回滚
 
@@ -327,6 +358,10 @@ Windows / PowerShell 见第 0 节；`--out` 属于 `load_master.py`，`recon_eng
 | `拒绝 …须为数字/日期/枚举…` | 确认单脏值被 L2 拦截 | 修正后重新生成确认单 |
 | `[保护] 目标文件已存在…` + stdout `[覆盖→<新文件名>]` | 防覆盖，属正常保护 | 确认后改名，或在配置加 `"overwrite": true` |
 | `[写入失败]`（`apply_contract.py` 会附 `_备份/` 位置） | 目标被 Excel 占用、磁盘或权限问题 | 关闭 Excel / WPS 后重试；按提示从 `_备份/` 取快照 |
+| `--check` 报「复核无效 / 复核锁缺失 / 哈希不一致」 | 工作簿复核后又被保存，或未做 L6 | 不得交付；重新生成复核包 → 重做 L6 → `--apply` |
+| 复核报告校验失败（checklist 未覆盖 R1–R10、阻断与结论不一致、有警告却判「通过」、摘要为空） | 报告不合规 | 按报错修正报告后重试（规则见 [references/复核协议.md](references/复核协议.md)） |
+| `_数据映射.json` 损坏 / 映射指向不存在的表或列 | 映射与当前源文件不一致 | 重跑 `inspect_schema` 生成映射，经用户确认后再 `--write` |
+| `必须经用户确认`（`apply_mapping.py` 缺 `--confirmed-by`） | 违反确认门禁 | 先 dry-run 展示、用户逐项裁决，再加 `--confirmed-by "<姓名>"` |
 
 回滚要点：主档取 `_备份/` 最近快照覆盖；对账单不覆盖同名文件（写 `_v2`）；`_确认记录/` 归档不动（审计痕迹）。详见 [references/故障与回滚.md](references/故障与回滚.md)。
 
@@ -346,8 +381,16 @@ Windows / PowerShell 见第 0 节；`--out` 属于 `load_master.py`，`recon_eng
 | `scripts/apply_contract.py` | 候选 JSON 或确认单 → 主档（dry-run / `--write` / `--force`；类型校验、毫秒备份、确认单归档、写入失败提示备份位置） |
 | `scripts/make_master.py` | 生成空白主档模板（六表）；`--template` 更新 skill 自带模板 |
 | `scripts/load_master.py` | 主档 → 引擎配置（`--pay` 缺省取合同付款日；`--strict` 严格预检；`--out` 指定输出） |
-| `scripts/recon_engine.py` | 对账引擎（8 表 + 贴花模块 + 五层校验；只读 `RECON_CFG`；覆盖保护写 `_v2`） |
+| `scripts/recon_engine.py` | 对账引擎（8 表 + 贴花模块 + L1–L5 确定性校验；只读 `RECON_CFG`；覆盖保护写 `_v2`） |
+| `scripts/make_review_packet.py` | 工作簿 → 复核包（packet JSON/MD；含哈希、figures、claims、cross_refs、redline_scan） |
+| `scripts/apply_review.py` | 复核报告校验与落盘（默认 dry-run；`--apply` 写 `08-复核记录` + 复核锁；`--check` 交付前校验） |
+| `scripts/review_common.py` | 复核层共享常量（schema / 枚举 / R1–R10 清单 / 哈希工具） |
+| `scripts/inspect_schema.py` | 结构探查（只读）：表名 / 字段名 / 顺序漂移与映射建议 |
+| `scripts/apply_mapping.py` | 映射确认与主档修复（dry-run 默认；`--write --confirmed-by`；`--fix-master` / `--fix-order`） |
+| `scripts/schema_common.py` | 结构层共享规范 / 同义词 / 模糊匹配工具 |
 | `references/客户主档设计.md` | 六表字段设计、维护方式、每期 5 问 |
+| `references/复核协议.md` | R1–R10 操作手册、复核包 / 报告 schema、判定与留痕规则 |
+| `references/数据映射与结构探查.md` | 漂移类型、`inspect_schema` 输出解读、映射 JSON、确认话术与主档修复 |
 | `references/故障与回滚.md` | 完整报错对照、`RECON_CFG` 结构、输出约定与回滚步骤 |
 | `assets/客户主档-模板.xlsx` | 可直接填写的六表模板 |
 
@@ -360,3 +403,5 @@ Windows / PowerShell 见第 0 节；`--out` 属于 `load_master.py`，`recon_eng
 3. 源数据必须是三方导出的结构化表格。无文本层扫描件不处理；乙方换 ERP 后须先更新列映射，脚本报错而非猜测。
 4. 库存数是「乙方系统导出」不是实盘；差异只证明数量差，不作归因、不认定责任、不推定税率。
 5. 合同抽取结果一律是候选值，须人工逐项确认后写库。
+6. **LLM 复核不构成审计意见**：L6 与复核锁只是流程控制与留痕机制，不对数据真实性作法律或审计背书；交付责任仍在执行人与业务双方。
+7. **映射确认不等于数据正确性背书**：`_数据映射.json` 只表示表名 / 列名 / 顺序的对应关系经用户认可；映射错误仍会产出错误结果，须靠引擎自检与 L6 复核兜底。

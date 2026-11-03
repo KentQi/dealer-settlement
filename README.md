@@ -5,7 +5,7 @@
 [![Agent Skills](https://img.shields.io/badge/Agent%20Skills-specification-informational)](https://agentskills.io/specification)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-面向 AI Agent 的「铺货代销对账」作业包：从经销合同建档，到月度对账出 8 表工作簿（对账单 / 库存差异 / 贴花费用），全程五层校验、缺失即阻断。
+面向 AI Agent 的「铺货代销对账」作业包：从经销合同建档，到月度对账出 8 表工作簿（对账单 / 库存差异 / 贴花费用），全程**五层确定性校验（L1–L5）+ L6 LLM 语义复核**，缺失即阻断；上游还能自动识别客户导出/主档的**表名、字段名、字段顺序漂移**，经用户确认后落映射继续跑。
 
 本仓库同时是：
 
@@ -21,13 +21,22 @@
 【一次性建档】
 合同原件 ──抽取──▶ 候选字段(带原文证据) ──HTML确认页(人工逐项确认)──▶ 写入客户主档（六表）
 
+【数据接入（按需）】
+主档/三份导出 ──inspect_schema──▶ 漂移报告+映射建议 ──用户逐项确认──▶ _数据映射.json ──▶ 引擎按映射取数
+
 【每月对账】
-三份月度导出(挂账/销售/库存) + 主档 ──▶ 8 表对账工作簿 + 贴花费用计算 + 自检报告
+三份月度导出(挂账/销售/库存) + 主档 ──▶ 8 表对账工作簿 + 贴花计算 + 自检报告
+                                              │
+                                              ▼
+                        L6 LLM 语义复核（R1–R10 清单）──▶ 08-复核记录 + 复核锁 ──▶ 交付
 ```
 
 - **对账口径**：铺货代销、按实际动销结算；六条恒等式 + 贴花计算规则，含时点回加
 - **贴花模块**：按「结算类动销数量 × 当期生效标准」计算，SCD2 生效区间，脏值 / 区间重叠 / 缺失一律阻断
-- **五层校验**：入口必填 → 写库类型 → 计算自检 → 结构守卫 → 输出防覆盖；失败时 stderr 给中文原因与可复制的修复命令，stdout 保持 0 字节
+- **五层确定性校验**：入口必填 → 写库类型 → 计算自检 → 结构守卫 → 输出防覆盖；失败时 stderr 给中文原因与可复制的修复命令，stdout 保持 0 字节
+- **L6 LLM 语义复核（交付门禁）**：脚本生成 token 友好的复核包（关键数 / 逐 SKU / 文字断言 / 交叉引用 / 红线扫描），由当前 harness 的 LLM 按 R1–R10 独立复算并判定；结论写入工作簿 `08-复核记录`，并用「复核锁」防止**审旧交新**——不通过不得交付，复核后再改文件即失效、必须重评
+- **结构漂移自动识别与映射确认**：表名 / 字段名 / 字段顺序不一致时，自动探查并给出带置信度的映射建议；**低置信项必须由用户逐项裁决**，确认后写入 `_数据映射.json` 供引擎确定性取数；主档可安全修复（先 dry-run、确认、再备份写入），永不修改客户源导出
+- **LLM 不联网、不调用外部模型**：复核与识别都由当前 harness 的 LLM 完成，脚本只提供结构化底稿、校验规则与留痕
 
 ## 兼容的 harness
 
@@ -74,7 +83,11 @@ ln -s "$PWD/skills/dealer-settlement" ~/.claude/skills/dealer-settlement
 
 ```bash
 pip install -r requirements.txt
-python3 examples/run_demo.py   # 生成演示主档与三份月度导出 → 跑通完整对账 → 自检
+make demo      # 三套端到端演示：对账主流程 / L6 复核门禁 / 结构漂移识别与映射确认
+# 也可单独跑：
+python3 examples/run_demo.py     # 生成演示数据 → 8 表对账 → 自检
+python3 examples/review_demo.py  # 复核包 → 复核记录 → 复核锁 → 防审旧交新
+python3 examples/schema_demo.py  # 制造表名/列名/顺序漂移 → 自动识别 → 确认映射 → 重跑通过
 ```
 
 演示数据全部生成在临时目录，不会写入任何客户目录。真实业务使用见 SKILL.md「3. 工作流」。
@@ -88,10 +101,10 @@ python3 examples/run_demo.py   # 生成演示主档与三份月度导出 → 跑
 ├── plugin.json                     # Agent Plugins 1.0.0 可移植清单（封闭字段集）
 ├── skills/dealer-settlement/       # 技能本体（可移植内容）
 │   ├── SKILL.md                    # frontmatter + 作业规程
-│   ├── scripts/                    # 建档、对账、确认页、校验脚本
-│   ├── references/                 # 客户主档设计、故障与回滚（按需加载）
+│   ├── scripts/                    # 建档、对账、复核（L6）、结构映射、校验脚本
+│   ├── references/                 # 主档设计 / 复核协议 / 数据映射 / 故障回滚（按需加载）
 │   └── assets/                     # 主档模板
-├── examples/                       # 演示数据生成器 + 端到端演示（CI 使用）
+├── examples/                       # 演示数据生成器 + 三套端到端演示（CI 使用）
 ├── tools/validate.py               # 规范校验器（清单 / frontmatter / 引用）
 ├── .claude-plugin/                 # Claude Code 原生插件与 marketplace 清单（兼容层）
 ├── .github/workflows/ci.yml        # 多版本 Python CI
@@ -115,7 +128,7 @@ python3 examples/run_demo.py   # 生成演示主档与三份月度导出 → 跑
 | 命令 | 作用 |
 |---|---|
 | `make check` | 校验 `plugin.json`、`SKILL.md` 是否符合 Agent Plugins / Agent Skills 规范，并做语法编译 |
-| `make demo` | 生成演示数据并端到端跑通对账流程 |
+| `make demo` | 三套端到端演示：对账主流程、L6 LLM 复核门禁、结构漂移识别与映射确认 |
 | `make package` | 构建 `dist/dealer-settlement.zip` |
 | `make clean` | 清理构建产物与 `__pycache__` |
 
@@ -129,7 +142,8 @@ python3 examples/run_demo.py   # 生成演示主档与三份月度导出 → 跑
 
 - 技能全程本地运行，不上传任何业务数据；导出、主档、确认记录都留在用户自己的目录。
 - 仓库内数据均为虚构演示值，**不要提交真实客户数据**（见 CONTRIBUTING 红线）。
-- 对账结果不构成审计意见；差异归因、税率、赔偿条款均需人工与双方书面确认。
+- 对账结果不构成审计意见；L6 LLM 复核也不构成审计/会计师意见，差异归因、税率、赔偿条款均需人工与双方书面确认。
+- 复核包、复核报告、映射确认记录都落在客户目录（`_复核记录/`、`_确认记录/`），便于事后追溯；不随任何网络请求外发。
 
 ## 许可
 
