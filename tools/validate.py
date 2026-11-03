@@ -260,6 +260,11 @@ def check_claude_plugin(plugin):
                     continue
                 if plugin is not None and entry.get("name") != plugin.get("name"):
                     warn("marketplace 插件条目名与根清单 name 不一致：" + repr(entry.get("name")))
+                source = entry.get("source")
+                # Claude Code 要求相对路径插件源以 "./" 开头（"." 会被 claude plugin validate 拒绝）
+                if isinstance(source, str) and not source.startswith("./"):
+                    err(".claude-plugin/marketplace.json：" + repr(entry.get("name"))
+                        + " 的 source 必须以 './' 开头，当前 " + repr(source))
         ok("marketplace.json 结构")
 
 

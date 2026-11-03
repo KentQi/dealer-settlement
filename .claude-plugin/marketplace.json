@@ -8,7 +8,7 @@
   "plugins": [
     {
       "name": "dealer-settlement",
-      "source": ".",
+      "source": "./",
       "description": "铺货代销全流程：合同建档、月度对账 8 表工作簿、贴花计算、五层校验",
       "license": "MIT",
       "keywords": [
