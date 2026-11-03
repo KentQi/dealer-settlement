@@ -1,13 +1,30 @@
 """把合同候选字段 + 主档现值渲染成一份可交互确认页（单文件 HTML，无外部依赖）。
 
-用户在浏览器里逐项确认、修改，点「提交」下载 确认单.json；该 JSON 可直接喂给
-apply_contract.py 写库，同时页面可打印成 PDF 留档。支持附件随单归档。
+用户在浏览器里逐项确认、修改，点「提交并保存确认单」；确认单默认存进浏览器的
+「下载」文件夹（文件名以「合同确认单_」开头、带提交时间），助手用
+locate_confirm.py 自动找到它，再交给 apply_contract.py 写库并归档——用户不需要
+移动或重命名任何文件。支持 File System Access API 的浏览器可另存到客户目录；
+页面仍可打印成 PDF 留档，附件随确认单一起归档。
 
 用法：
     python3 make_confirm_html.py <候选.json> <_主档.xlsx> [-o 确认页.html]
 """
 import sys, os, json, argparse, datetime, html
 import openpyxl
+
+# 文件名里各系统都不接受（或容易被转义）的字符
+_UNSAFE_FILENAME_CHARS = '\\/:*?"<>|'
+
+
+def safe_filename_part(name):
+    """客户名 → 可安全用于文件名的片段：保留字符替换为 _，去首尾空白。
+
+    例：「示例/经销商:有限公司」→「示例_经销商_有限公司」；空名称回落为「客户」。
+    """
+    s = "".join("_" if ord(ch) < 32 else ch for ch in str(name or ""))
+    for ch in _UNSAFE_FILENAME_CHARS:
+        s = s.replace(ch, "_")
+    return s.strip().rstrip(". ") or "客户"
 
 
 def load_master_values(path):
@@ -217,6 +234,15 @@ button.btn:disabled{opacity:.45;cursor:not-allowed}
 .modal .row b{color:var(--navy)}
 .modal .warnline{margin-top:12px;background:#FDECEA;color:var(--red);padding:9px 12px;border-radius:7px;font-size:12.5px;display:none}
 .modal .acts{display:flex;gap:10px;justify-content:flex-end;margin-top:18px}
+.modal.done{max-width:560px}
+.modal .doneLead{margin:0 0 8px;font-size:15.5px;color:#111827}
+.modal .doneLead b{color:var(--navy);font-size:17px;margin:0 2px}
+.modal .doneSub{margin:0 0 14px;font-size:13px;color:#4B5563;line-height:1.75}
+.modal .rows{padding-top:2px}
+.modal .adv{margin-top:12px;border-top:1px dashed #EEF1F6;padding-top:10px}
+.modal .adv summary{cursor:pointer;font-size:12.5px;color:var(--blue);outline:none;user-select:none}
+.modal .advHint{margin:8px 0;font-size:12px;color:var(--muted)}
+button.btn.small{padding:6px 12px;font-size:12.5px}
 
 /* 提示条 */
 .toast{position:fixed;left:50%;bottom:86px;transform:translateX(-50%) translateY(10px);opacity:0;
@@ -291,7 +317,7 @@ button.btn:disabled{opacity:.45;cursor:not-allowed}
       <td style="border:1px solid #999;padding:10px 14px">复核人：＿＿＿＿＿＿＿＿</td>
     </tr>
   </table>
-  <p style="font-size:11px;color:#666;margin-top:8px">本页为合同信息确认留档，与确认单 JSON 具同等效力；勾选「采用此值」的项将写入客户主档。</p>
+  <p style="font-size:11px;color:#666;margin-top:8px">本页为合同信息确认留档，与提交的确认单文件具同等效力；勾选「采用此值」的项将写入客户主档。</p>
 </div>
 
 <section class="grp attbox no-print">
@@ -321,13 +347,13 @@ button.btn:disabled{opacity:.45;cursor:not-allowed}
   </div>
   <div class="sp"></div>
   <button class="btn ghost" id="btnPrint">打印 / 存 PDF</button>
-  <button class="btn ghost" id="btnCopy">复制 JSON</button>
-  <button class="btn" id="btnSubmit">提交并下载确认单</button>
+  <button class="btn ghost" id="btnCopy" title="备用：仅在浏览器无法保存文件时使用">复制确认单内容</button>
+  <button class="btn" id="btnSubmit">提交并保存确认单</button>
 </footer>
 
 <div class="mask" id="mask">
   <div class="modal">
-    <h3>确认提交</h3>
+    <h3>确认并保存</h3>
     <div class="row"><span>确认人</span><b id="mOp">—</b></div>
     <div class="row"><span>将写入主档</span><b id="mWrite">0 项</b></div>
     <div class="row"><span>保留现值（不写入）</span><b id="mKeep">0 项</b></div>
@@ -336,21 +362,35 @@ button.btn:disabled{opacity:.45;cursor:not-allowed}
     <div class="warnline" id="mWarn"></div>
     <div class="acts">
       <button class="btn ghost" id="mCancel">返回修改</button>
-      <button class="btn" id="mOk">确认并下载</button>
+      <button class="btn" id="mOk">确认并保存</button>
     </div>
   </div>
 </div>
 <div class="mask" id="doneMask">
-  <div class="modal">
-    <h3>确认单已下载</h3>
-    <p style="font-size:13px;color:#374151;margin:0 0 12px">文件已在你的「下载」目录。接下来三步：</p>
-    <ol style="font-size:13px;color:#374151;line-height:1.9;padding-left:20px;margin:0">
-      <li>把该 JSON 放进客户目录：<br><code id="dPath" style="background:#F3F5F9;padding:3px 7px;border-radius:5px;font-size:12px;word-break:break-all;display:inline-block;margin-top:4px"></code></li>
-      <li>回到对话，告诉助手「确认单已放好」</li>
-      <li>助手会写入主档、归档确认单与附件，并生成备份</li>
-    </ol>
+  <div class="modal done">
+    <h3>已提交成功</h3>
+    <p class="doneLead">回到对话，对助手说一句<b>「好了」</b>即可。</p>
+    <p class="doneSub">助手会自动找到这份确认单并归档写入主档，不需要你移动任何文件。</p>
+    <div class="rows">
+      <div class="row"><span>确认人</span><b id="dOp">—</b></div>
+      <div class="row"><span>客户</span><b id="dCustomer">—</b></div>
+      <div class="row"><span>保存位置</span><b id="dWhere">「下载」文件夹（浏览器默认位置）</b></div>
+      <div class="row"><span>文件名</span><b id="dFile">—</b></div>
+    </div>
+    <details class="adv">
+      <summary>给助手看的信息</summary>
+      <div class="rows">
+        <div class="row"><span>客户目录</span><b id="dPath">—</b></div>
+        <div class="row"><span>确认项数</span><b id="dCount">—</b></div>
+      </div>
+    </details>
+    <details class="adv">
+      <summary>其他保存方式</summary>
+      <p class="advHint">仅在浏览器无法正常保存文件时使用。</p>
+      <button class="btn ghost small" id="dCopy">复制确认单内容</button>
+    </details>
     <div class="acts">
-      <button class="btn ghost" id="dCopy">再复制一份 JSON</button>
+      <button class="btn ghost" id="dSaveDir">存到客户目录…</button>
       <button class="btn" id="dOk">知道了</button>
     </div>
   </div>
@@ -609,6 +649,58 @@ function precheck(){
   if(total>MAX_ALL){toast('附件合计超过 15MB，请精简后重试');return false;}
   return true;
 }
+/* ---------- 保存：确定性文件名 + （可选）直接存到文件夹 ---------- */
+const pad2=n=>String(n).padStart(2,'0');
+/* 文件名：合同确认单_<客户名>_YYYYMMDD_HHMMSS_mmm.json（提交时间，助手据此定位） */
+function stampNow(){
+  const d=new Date();
+  return String(d.getFullYear())+pad2(d.getMonth()+1)+pad2(d.getDate())+'_'
+       + pad2(d.getHours())+pad2(d.getMinutes())+pad2(d.getSeconds())+'_'
+       + String(d.getMilliseconds()).padStart(3,'0');
+}
+function confirmFileName(){return (META.download_prefix||'合同确认单_客户_')+stampNow()+'.json';}
+function downloadText(name,text){
+  const blob=new Blob([text],{type:'application/json'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url; a.download=name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),1500);
+}
+/* File System Access API 只在用户手势里可用；不支持时保持默认下载，不阻塞用户 */
+function canPickFile(){
+  try{return typeof window.showSaveFilePicker==='function';}catch(e){return false;}
+}
+function markSaved(where,name){
+  byId('dWhere').textContent=where||'「下载」文件夹（浏览器默认位置）';
+  if(name) byId('dFile').textContent=name;
+}
+let LAST=null;   /* 本次提交的确认单：下载与「存到客户目录」共用同一份内容 */
+async function saveToCustomerDir(){
+  if(!LAST){toast('请先点「提交并保存确认单」完成提交');return;}
+  if(!canPickFile()){
+    toast('当前浏览器不支持直接保存到文件夹，确认单已在「下载」文件夹里');
+    downloadText(LAST.name,LAST.text);
+    return;
+  }
+  try{
+    const handle=await window.showSaveFilePicker({
+      suggestedName:LAST.name,
+      types:[{description:'确认单文件',accept:{'application/json':['.json']}}]
+    });
+    const w=await handle.createWritable();
+    await w.write(LAST.text);
+    await w.close();
+    markSaved('你选择的文件夹',handle.name||LAST.name);
+    toast('已保存到「'+(handle.name||LAST.name)+'」');
+  }catch(err){
+    if(err&&err.name==='AbortError'){toast('已取消；确认单仍在「下载」文件夹里');return;}
+    toast('未能直接保存到文件夹，已改用默认方式保存');
+    downloadText(LAST.name,LAST.text);
+  }
+}
+byId('dSaveDir').onclick=saveToCustomerDir;
+
 byId('btnSubmit').onclick=()=>{
   if(!precheck()) return;
   const p=buildPayload();
@@ -627,33 +719,37 @@ byId('mCancel').onclick=()=>byId('mask').classList.remove('on');
 byId('mOk').onclick=()=>{
   byId('mask').classList.remove('on');
   const p=buildPayload();
-  const blob=new Blob([JSON.stringify(p,null,2)],{type:'application/json'});
-  const a=document.createElement('a');
-  a.href=URL.createObjectURL(blob);
-  a.download=`合同确认单_${META.customer||'客户'}_${new Date().toISOString().slice(0,10)}.json`;
-  document.body.appendChild(a);a.click();a.remove();
+  const text=JSON.stringify(p,null,2);
+  const name=confirmFileName();
+  LAST={payload:p,text:text,name:name};
+  downloadText(name,text);          /* 主流程：默认存进浏览器「下载」文件夹 */
   window.__dirty=false;
   clearDraft();
+  byId('dOp').textContent=p.meta.operator||'—';
+  byId('dCustomer').textContent=META.customer||'—';
+  byId('dCount').textContent=p.fields.length+' 项';
   byId('dPath').textContent=META.target_dir||'（客户目录）';
+  markSaved('「下载」文件夹（浏览器默认位置）',name);
   byId('doneMask').classList.add('on');
 };
-function copyJSON(){
+function copyConfirm(){
   if(!precheck()) return;
   const txt=JSON.stringify(buildPayload(),null,2);
+  const done=()=>toast('确认单内容已复制到剪贴板');
   (navigator.clipboard?navigator.clipboard.writeText(txt):Promise.reject())
-    .then(()=>toast('JSON 已复制到剪贴板'))
+    .then(done)
     .catch(()=>{
       const ta=document.createElement('textarea');ta.value=txt;document.body.appendChild(ta);
-      ta.select();document.execCommand('copy');ta.remove();toast('JSON 已复制到剪贴板');
+      ta.select();document.execCommand('copy');ta.remove();done();
     });
 }
-byId('btnCopy').onclick=copyJSON;
+byId('btnCopy').onclick=copyConfirm;
 byId('dOk').onclick=()=>byId('doneMask').classList.remove('on');
-byId('dCopy').onclick=()=>{copyJSON();};
+byId('dCopy').onclick=()=>{copyConfirm();};
 byId('btnPrint').onclick=()=>window.print();
 
 document.addEventListener('keydown',e=>{
-  if(e.key==='Escape') byId('mask').classList.remove('on');
+  if(e.key==='Escape'){byId('mask').classList.remove('on');byId('doneMask').classList.remove('on');}
   if((e.metaKey||e.ctrlKey)&&e.key==='Enter'){e.preventDefault();byId('btnSubmit').click();}
 });
 window.addEventListener('beforeunload',e=>{
@@ -684,12 +780,16 @@ def main():
     master = load_master_values(a.master)
     rows = build_rows(cand, master)
 
+    customer_name = str(master.get("_客户名称") or "").strip()
     meta = {
-        "customer": master.get("_客户名称") or "",
+        "customer": customer_name,
         "contract": master.get("_合同编号") or "",
         "source_file": os.path.basename(cand.get("file", "")),
         "page": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
         "target_dir": os.path.dirname(os.path.abspath(a.master)),
+        # 确定性文件名前缀：JS 提交时拼 YYYYMMDD_HHMMSS_mmm.json；
+        # locate_confirm.py 据此自动定位用户刚提交的确认单。
+        "download_prefix": "合同确认单_" + safe_filename_part(customer_name) + "_",
     }
     subtitle = (f"客户：{meta['customer'] or '—'}　·　合同编号：{meta['contract'] or '—'}　·　"
                 f"来源文件：{meta['source_file']}　·　生成于 {meta['page']}")

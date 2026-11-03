@@ -19,7 +19,7 @@
 
 ```
 【一次性建档】
-合同原件 ──抽取──▶ 候选字段(带原文证据) ──HTML确认页(人工逐项确认)──▶ 写入客户主档（六表）
+合同原件 ──抽取──▶ 候选字段(带原文证据) ──HTML确认页(人工逐项确认)──▶ 助手自动定位确认单 ──▶ 写入客户主档（六表）
 
 【数据接入（按需）】
 主档/三份导出 ──inspect_schema──▶ 漂移报告+映射建议 ──用户逐项确认──▶ _数据映射.json ──▶ 引擎按映射取数
@@ -31,6 +31,7 @@
                         L6 LLM 语义复核（R1–R10 清单）──▶ 08-复核记录 + 复核锁 ──▶ 交付
 ```
 
+- **确认单零文件操作**：确认页在浏览器里逐项确认后，用户只需回对话说一句「好了」；助手用 `locate_confirm.py` 自动从下载目录（或客户目录）找到确认单并归档，**不需要用户搬运/重命名 JSON**；支持 File System Access API 的浏览器还能直接存入客户目录
 - **对账口径**：铺货代销、按实际动销结算；六条恒等式 + 贴花计算规则，含时点回加
 - **贴花模块**：按「结算类动销数量 × 当期生效标准」计算，SCD2 生效区间，脏值 / 区间重叠 / 缺失一律阻断
 - **五层确定性校验**：入口必填 → 写库类型 → 计算自检 → 结构守卫 → 输出防覆盖；失败时 stderr 给中文原因与可复制的修复命令，stdout 保持 0 字节
@@ -83,11 +84,12 @@ ln -s "$PWD/skills/dealer-settlement" ~/.claude/skills/dealer-settlement
 
 ```bash
 pip install -r requirements.txt
-make demo      # 三套端到端演示：对账主流程 / L6 复核门禁 / 结构漂移识别与映射确认
+make demo      # 四套端到端演示：对账主流程 / L6 复核门禁 / 结构漂移识别 / 确认单自动定位
 # 也可单独跑：
-python3 examples/run_demo.py     # 生成演示数据 → 8 表对账 → 自检
-python3 examples/review_demo.py  # 复核包 → 复核记录 → 复核锁 → 防审旧交新
-python3 examples/schema_demo.py  # 制造表名/列名/顺序漂移 → 自动识别 → 确认映射 → 重跑通过
+python3 examples/run_demo.py      # 生成演示数据 → 8 表对账 → 自检
+python3 examples/review_demo.py   # 复核包 → 复核记录 → 复核锁 → 防审旧交新
+python3 examples/schema_demo.py   # 制造表名/列名/顺序漂移 → 自动识别 → 确认映射 → 重跑通过
+python3 examples/confirm_demo.py  # 确认页文案 → 自动定位确认单 → 归档写入主档
 ```
 
 演示数据全部生成在临时目录，不会写入任何客户目录。真实业务使用见 SKILL.md「3. 工作流」。
@@ -104,7 +106,7 @@ python3 examples/schema_demo.py  # 制造表名/列名/顺序漂移 → 自动�
 │   ├── scripts/                    # 建档、对账、复核（L6）、结构映射、校验脚本
 │   ├── references/                 # 主档设计 / 复核协议 / 数据映射 / 故障回滚（按需加载）
 │   └── assets/                     # 主档模板
-├── examples/                       # 演示数据生成器 + 三套端到端演示（CI 使用）
+├── examples/                       # 演示数据生成器 + 四套端到端演示（CI 使用）
 ├── tools/validate.py               # 规范校验器（清单 / frontmatter / 引用）
 ├── .claude-plugin/                 # Claude Code 原生插件与 marketplace 清单（兼容层）
 ├── .github/workflows/ci.yml        # 多版本 Python CI
@@ -128,7 +130,7 @@ python3 examples/schema_demo.py  # 制造表名/列名/顺序漂移 → 自动�
 | 命令 | 作用 |
 |---|---|
 | `make check` | 校验 `plugin.json`、`SKILL.md` 是否符合 Agent Plugins / Agent Skills 规范，并做语法编译 |
-| `make demo` | 三套端到端演示：对账主流程、L6 LLM 复核门禁、结构漂移识别与映射确认 |
+| `make demo` | 四套端到端演示：对账主流程、L6 LLM 复核门禁、结构漂移识别与映射确认、确认单自动定位 |
 | `make package` | 构建 `dist/dealer-settlement.zip` |
 | `make clean` | 清理构建产物与 `__pycache__` |
 

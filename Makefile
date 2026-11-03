@@ -7,7 +7,7 @@ PYTHON ?= python3
 help:
 	@printf '%s\n' \
 	  'make check    校验插件/技能清单、语法编译' \
-	  'make demo     三套端到端演示：对账 / L6 复核 / 结构映射' \
+	  'make demo     四套端到端演示：对账 / L6 复核 / 结构映射 / 确认单定位' \
 	  'make package  构建 dist/dealer-settlement.zip（扁平技能安装包）' \
 	  'make clean    清理构建产物与 __pycache__'
 
@@ -19,6 +19,7 @@ demo:
 	$(PYTHON) examples/run_demo.py
 	$(PYTHON) examples/review_demo.py
 	$(PYTHON) examples/schema_demo.py
+	$(PYTHON) examples/confirm_demo.py
 
 package: check
 	@mkdir -p dist

@@ -1,11 +1,11 @@
 ---
 name: dealer-settlement
-description: 铺货代销（代销 / 铺货）对账作业包，覆盖五件事：① 从经销合同识别关键字段、生成 HTML 确认页、经人工逐项确认后写入客户主档（六表）；② 用客户主档 + 当期三份导出（甲方挂账、乙方销售流水、乙方库存）生成 8 表对账工作簿；③ 五层确定性校验（L1–L5）保证数字可审计、缺失即阻断；④ L6 LLM 语义复核：交付前按 R1–R10 复核，结论与哈希锁写入工作簿 08-复核记录；⑤ 结构漂移识别与映射确认：表名 / 字段名 / 列顺序不一致时先探查、经用户逐项确认后生成 _数据映射.json。当用户要求「识别合同 / 建客户档 / 做合同台账」「某月对账 / 算应结算金额 / 核对库存 / 出对账单 / 算贴花」「复核本次出账 / 验收 / 按审计口径检查」或询问「怎么操作 / 需要准备什么材料」，以及提到「字段名不一致 / 表名不一致 / 列顺序不同 / 表头识别 / 映射确认」时使用。判据与校验通用，但单据版式与披露文案按「品牌方 × 经销商（示例）」场景打磨，换客户首次出账需复核版式。
+description: 铺货代销（代销 / 铺货）对账作业包，覆盖六件事：① 从经销合同识别关键字段、生成 HTML 确认页、经人工逐项确认后写入客户主档（六表）；② 用客户主档 + 当期三份导出（甲方挂账、乙方销售流水、乙方库存）生成 8 表对账工作簿；③ 五层确定性校验（L1–L5）保证数字可审计、缺失即阻断；④ L6 LLM 语义复核：交付前按 R1–R10 复核，结论与哈希锁写入工作簿 08-复核记录；⑤ 结构漂移识别与映射确认：表名 / 字段名 / 列顺序不一致时先探查、经用户逐项确认后生成 _数据映射.json；⑥ 确认单零文件操作：确认页提交后助手自动定位并归档，无需用户手动搬文件。当用户要求「识别合同 / 建客户档 / 做合同台账」「某月对账 / 算应结算金额 / 核对库存 / 出对账单 / 算贴花」「复核本次出账 / 验收 / 按审计口径检查」或询问「怎么操作 / 需要准备什么材料」，以及提到「字段名不一致 / 表名不一致 / 列顺序不同 / 表头识别 / 映射确认」「确认页提交 / 自动定位确认单 / 不用手动搬文件」时使用。判据与校验通用，但单据版式与披露文案按「品牌方 × 经销商（示例）」场景打磨，换客户首次出账需复核版式。
 license: MIT
 compatibility: Requires Python 3.9+ with openpyxl, xlrd (>=2.0, .xls read) and pdfplumber, plus read/write access to the customer workbook folder. Optional — Excel/WPS/LibreOffice to open generated .xlsx; OCR tooling only for scanned contracts. L6 review runs in the harness LLM (scripts never call a model) and needs workbook read + file write; without write access, output the report JSON for manual archiving. Commands are shown in bash with PowerShell equivalents for Windows.
 metadata:
   author: KentQi
-  version: "1.2.0"
+  version: "1.3.0"
 ---
 
 # 铺货代销全流程：建档 → 确认 → 对账 → 校验 → 复核
@@ -26,6 +26,7 @@ metadata:
 - **能力与回退**（当前 harness 有则该能力、无则回退；不假定任何具体工具名）：
   - 文件展示 / 打开：有展示或打开能力 → 把生成的文件直接呈现给用户；否则给出**绝对路径**，让用户用浏览器（HTML）、Excel / WPS / LibreOffice（xlsx）手动打开。
   - 结构化提问 / 确认卡片：有且离散决策 ≤ 4 项 → 可用；否则在回复中逐项提问。合同字段确认默认走 HTML 确认页，**不依赖** harness 交互能力。
+  - **确认单去向**：确认页提交后，确认单通常在浏览器下载目录（用户点过「存到客户目录」时在客户目录）；助手用 `locate_confirm.py` 自动定位（阶段 A3.5），**不要让用户搬文件**，也不要向普通用户解释文件格式。
   - 本地文件读写：有读取能力 → 直接读；否则让用户提供路径或上传附件。
   - LLM 语义复核：由**当前 harness 的模型**执行，脚本不调用任何外部模型；harness 无文件写权限时，至少输出复核报告 JSON 由用户归档（详见 [references/复核协议.md](references/复核协议.md)）。
   - 网络：脚本不联网；除首次 pip 安装依赖外无需网络。
@@ -48,7 +49,7 @@ py -3 "$SKILL_DIR\scripts\recon_engine.py"
 （详见 references/数据映射与结构探查.md；确认前不写盘，永不改三份源导出）
 
 【一次性建档】
-合同原件 ──A1 抽取──▶ 候选字段 JSON ──A3 确认页(人工逐项确认)──▶ 确认单 JSON
+合同原件 ──A1 抽取──▶ 候选字段 JSON ──A3 确认页(人工确认+提交)──▶ A3.5 自动定位确认单
                                                                        │
                         ┌──────────────────────────────────────────────┘
                         ▼
@@ -160,17 +161,27 @@ python3 "$SKILL_DIR/scripts/make_digest.py" <_主档.xlsx>
 # A3 生成确认页（抽取脚本固定输出 22 项候选字段，逐项确认走 HTML，不要用聊天逐问）
 python3 "$SKILL_DIR/scripts/make_confirm_html.py" /tmp/contract.json <_主档.xlsx>
 #   → 展示/打开 _确认页_YYYYMMDD.html（默认生成在主档同目录；无展示能力时给绝对路径，用浏览器打开）；
-#     用户逐项确认、填「确认人」后提交，浏览器下载 确认单 JSON
+#     用户逐项确认、填「确认人」后点「提交」，回对话说一声「好了」即可。
+
+# A3.5 自动定位确认单（用户说「好了」之后执行；无需用户搬文件、不要解释文件格式）
+python3 "$SKILL_DIR/scripts/locate_confirm.py" --customer "<客户根目录>" --max-age-minutes 120 --json
+#   退出 0 → 取 JSON 的 chosen.path，记为 CONFIRM 后进入 A4（人话摘要里也有「文件 : <绝对路径>」行）；
+#   退出 2 → 多份候选：JSON 的 chosen 是最新一份，用它在并明确告诉用户「用了最新提交的那份」，或一句话请用户确认；
+#   退出 1 → 一句话问用户（确认页是否已点「提交」？是否换了浏览器 / 电脑？），必要时加
+#              --dir "<下载目录>" 兜底再试。
+CONFIRM="<退出 0 时 JSON 的 chosen.path>"
 
 # A4 写库（先 dry-run 看差异，再 --write；写库自动类型校验 + 备份 + 归档确认单）
-python3 "$SKILL_DIR/scripts/apply_contract.py" <_主档.xlsx> <确认单.json>
-python3 "$SKILL_DIR/scripts/apply_contract.py" <_主档.xlsx> <确认单.json> --write
+python3 "$SKILL_DIR/scripts/apply_contract.py" <_主档.xlsx> "$CONFIRM"
+python3 "$SKILL_DIR/scripts/apply_contract.py" <_主档.xlsx> "$CONFIRM" --write
 
 # A5 重跑摘要（供人工核对与归档；引擎直接读主档，不读摘要）
 python3 "$SKILL_DIR/scripts/make_digest.py" <_主档.xlsx>
 ```
 
 A3 确认门槛不可跳过：抽取结果是候选，不是结论。冲突项（主档现值 ≠ 候选值）在确认页由用户裁决；已确认单里的冲突按确认值写入。待核项留空不猜。
+
+**A3.5 红线**：**不得要求用户移动 / 复制 / 重命名确认单文件，也不得向普通用户解释 JSON 等文件格式**；找不到时用一句人话问（确认页是否已点「提交」？是否换了浏览器 / 电脑？），必要时用 `--dir` 指定下载目录再定位。多份候选时，助手用最新的一份并明确说「用了最新提交的那份」，或一句话请用户确认。
 
 ### 阶段 B：月度对账
 
@@ -261,7 +272,7 @@ Windows / PowerShell 见第 0 节；`--out` 属于 `load_master.py`，`recon_eng
 
 **「这是新客户，第一次做」**
 1. 要合同电子版（docx 优先）→ 跑 A1；
-2. `make_master.py` 建模板 → A3 确认页让用户逐项确认 → A4 写库；
+2. `make_master.py` 建模板 → A3 确认页让用户逐项确认 → 用户在页面点「提交」后回对话说「好了」→ 助手按 A3.5 自动定位确认单并归档写库（A4，先 dry-run 再 `--write`）；全程不需要用户搬文件，也不要向用户解释文件格式；
 3. 引导用户补三样 AI 拿不到的信息：甲方收款账户、税率口径、贴花标准表；
 4. 再走「我要出 X 月对账单」。
 
@@ -355,7 +366,10 @@ Windows / PowerShell 见第 0 节；`--out` 属于 `load_master.py`，`recon_eng
 | `[参数错误] --period / --asof / --pay …` | 期间非 6 位年月，或日期不是 YYYY-MM-DD | 改成 `202610` / `2026-11-02` 形式 |
 | `[中止] 含关键词 … 的工作表有 N 张…` | 源文件里多张表名都匹配，脚本不猜 | 只保留一张或改表名（唯一含数据表时会以 ⚠ 提示后采用） |
 | `[自检未通过] …`（结算属性未明确、贴花缺记录、数量恒等式不成立等） | L3 / L4 校验拦截 | 按提示补主档 / 修源表；缺失值不会被默认 |
-| `拒绝 …须为数字/日期/枚举…` | 确认单脏值被 L2 拦截 | 修正后重新生成确认单 |
+| `拒绝 …须为数字/日期/枚举…` | 确认单脏值被 L2 拦截 | 请用户在确认页修正后重新提交，再跑 A3.5 自动定位最新确认单 |
+| `[未找到确认单]` | 用户还没点「提交」、浏览器下载位置未知，或换了浏览器 / 电脑 | 一句话问用户（是否已点「提交」？是否换了浏览器 / 电脑？）；必要时 `--dir "<下载目录>"` 兜底，**不要让用户搬文件** |
+| `[确认单有多个候选]` | 下载目录附近有多份近期确认单 | 助手用最新一份并明确说「用了最新提交的那份」，或一句话请用户确认 |
+| `[中止] 确认单缺少确认人（meta.operator 为空）` | 确认页未填确认人 | 请用户在确认页填姓名后重新提交，再跑 A3.5 自动定位 |
 | `[保护] 目标文件已存在…` + stdout `[覆盖→<新文件名>]` | 防覆盖，属正常保护 | 确认后改名，或在配置加 `"overwrite": true` |
 | `[写入失败]`（`apply_contract.py` 会附 `_备份/` 位置） | 目标被 Excel 占用、磁盘或权限问题 | 关闭 Excel / WPS 后重试；按提示从 `_备份/` 取快照 |
 | `--check` 报「复核无效 / 复核锁缺失 / 哈希不一致」 | 工作簿复核后又被保存，或未做 L6 | 不得交付；重新生成复核包 → 重做 L6 → `--apply` |
@@ -377,7 +391,8 @@ Windows / PowerShell 见第 0 节；`--out` 属于 `load_master.py`，`recon_eng
 |---|---|
 | `scripts/extract_contract.py` | 合同（.docx/.pdf/.xlsx/.xlsm/.txt/.md）→ 候选字段 JSON（22 项，带原文证据、needs_ocr 标志） |
 | `scripts/make_digest.py` | 主档 → 合同摘要 Markdown（同时打印到 stdout） |
-| `scripts/make_confirm_html.py` | 候选字段 + 主档现值 → 交互式确认页（单文件 HTML，支持附件、草稿、筛选） |
+| `scripts/make_confirm_html.py` | 候选字段 + 主档现值 → 交互式确认页（单文件 HTML，支持附件、草稿、筛选；提交后助手自动定位，浏览器支持时可直接存入客户目录） |
+| `scripts/locate_confirm.py` | 自动定位最新确认单（浏览器下载目录 / 客户目录；`--customer`、`--max-age-minutes`、`--dir` 兜底；退出 0/2/1） |
 | `scripts/apply_contract.py` | 候选 JSON 或确认单 → 主档（dry-run / `--write` / `--force`；类型校验、毫秒备份、确认单归档、写入失败提示备份位置） |
 | `scripts/make_master.py` | 生成空白主档模板（六表）；`--template` 更新 skill 自带模板 |
 | `scripts/load_master.py` | 主档 → 引擎配置（`--pay` 缺省取合同付款日；`--strict` 严格预检；`--out` 指定输出） |
@@ -405,3 +420,4 @@ Windows / PowerShell 见第 0 节；`--out` 属于 `load_master.py`，`recon_eng
 5. 合同抽取结果一律是候选值，须人工逐项确认后写库。
 6. **LLM 复核不构成审计意见**：L6 与复核锁只是流程控制与留痕机制，不对数据真实性作法律或审计背书；交付责任仍在执行人与业务双方。
 7. **映射确认不等于数据正确性背书**：`_数据映射.json` 只表示表名 / 列名 / 顺序的对应关系经用户认可；映射错误仍会产出错误结果，须靠引擎自检与 L6 复核兜底。
+8. **浏览器安全限制**：确认页是网页，受浏览器沙箱约束，**不能直接写任意本地路径**。默认走「浏览器下载 + 助手用 `locate_confirm.py` 自动定位」；支持 File System Access API 的浏览器可选择直接存入客户目录；harness 无文件读写权限时，才由用户手动提供确认单位置（不要向普通用户解释文件格式）。
