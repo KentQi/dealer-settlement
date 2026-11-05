@@ -5,6 +5,17 @@
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-11-05
+
+### Fixed
+
+- **发布包中文文件名乱码**：`make package` 原先调用系统 `zip`，macOS 会按本地编码写入文件名且不设 UTF-8 标志（0x800），Windows 解压后 `references/` 下的 4 个中文文档与主档模板全部乱码。改用 `tools/package_zip.py`（Python `zipfile`）显式设置 UTF-8 标志，并在打包后自检「非 ASCII 文件名是否都带标志」，不通过即失败。
+
+### Added
+
+- `make package` 现在同时产出两个包：`dist/dealer-settlement.zip`（技能安装包，扁平结构）与 `dist/dealer-settlement-<版本>-source.zip`（完整源码，带版本前缀目录，含 `.github/`、`.claude-plugin/`、`tools/`）。
+- `tools/package_zip.py` 统一排除 `.git/`、`dist/`、`__pycache__/`、`*.pyc`、`.DS_Store`、`*.bak`，避免把缓存与临时文件打进发布包。
+
 ## [1.5.0] - 2026-11-05
 
 补齐「乙方未提供库存」的正确处理。此前若某个已挂账 SKU 在乙方库存表里缺失，引擎按库存 0 计，会凭空产生等额短缺（缺几个 SKU，就虚增几笔等于其理论结存的短缺）。

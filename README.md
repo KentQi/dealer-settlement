@@ -53,7 +53,7 @@ VS Code · Cursor · GitHub Copilot · ChatGPT & Codex · Kiro · Hermes Agent �
 |---|---|
 | 上述 Agent Plugins 客户端 | 把本仓库根目录作为插件包安装（含 `plugin.json` 与 `skills/`） |
 | Claude Code | `claude plugin marketplace add KentQi/dealer-settlement` 后 `claude plugin install dealer-settlement@dealer-settlement`；或本地 `claude --plugin-dir /path/to/dealer-settlement` |
-| 仅支持 Agent Skills 的 harness | 用 `make package` 生成 `dist/dealer-settlement.zip`，解压到该 harness 的 skills 根目录 |
+| 仅支持 Agent Skills 的 harness | 用 `make package` 生成 `dist/dealer-settlement.zip`（技能安装包），解压到该 harness 的 skills 根目录；同目录另有 `dealer-settlement-<版本>-source.zip` 完整源码包 |
 | WorkBuddy | `unzip dist/dealer-settlement.zip -d ~/.workbuddy/skills/` |
 
 技能内所有命令都用 `SKILL_DIR`（SKILL.md 所在目录）定位脚本，不依赖当前工作目录；同时给出 bash 与 PowerShell 写法（见 SKILL.md 第 0 节）。
@@ -73,7 +73,7 @@ claude plugin install dealer-settlement@dealer-settlement
 ### 作为单技能包安装
 
 ```bash
-make package    # 生成 dist/dealer-settlement.zip，技能目录位于 zip 根
+make package    # 生成 dist/dealer-settlement.zip（技能包）+ dist/dealer-settlement-<版本>-source.zip（源码包）
 unzip dist/dealer-settlement.zip -d ~/.claude/skills/
 
 # 或直接软链（目录名必须保持 dealer-settlement）
@@ -131,7 +131,7 @@ python3 examples/confirm_demo.py  # 确认页文案 → 自动定位确认单 �
 |---|---|
 | `make check` | 校验 `plugin.json`、`SKILL.md` 是否符合 Agent Plugins / Agent Skills 规范，并做语法编译 |
 | `make demo` | 四套端到端演示：对账主流程、L6 LLM 复核门禁、结构漂移识别与映射确认、确认单自动定位 |
-| `make package` | 构建 `dist/dealer-settlement.zip` |
+| `make package` | 构建两个包：`dist/dealer-settlement.zip`（技能安装包）、`dist/dealer-settlement-<版本>-source.zip`（完整源码）；文件名统一 UTF-8，跨平台解压不乱码 |
 | `make clean` | 清理构建产物与 `__pycache__` |
 
 贡献前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。

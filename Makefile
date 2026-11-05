@@ -8,7 +8,7 @@ help:
 	@printf '%s\n' \
 	  'make check    校验插件/技能清单、语法编译' \
 	  'make demo     四套端到端演示：对账 / L6 复核 / 结构映射 / 确认单定位' \
-	  'make package  构建 dist/dealer-settlement.zip（扁平技能安装包）' \
+	  'make package  构建 dist/ 下两个包：技能安装包 + 完整源码包（UTF-8 文件名）' \
 	  'make clean    清理构建产物与 __pycache__'
 
 check:
@@ -22,11 +22,7 @@ demo:
 	$(PYTHON) examples/confirm_demo.py
 
 package: check
-	@mkdir -p dist
-	@rm -f dist/dealer-settlement.zip
-	cd skills && zip -qr ../dist/dealer-settlement.zip dealer-settlement \
-	  -x '*/__pycache__/*' '*.pyc' '*.pyo' '*.DS_Store' '__pycache__/*'
-	@echo "打包完成：dist/dealer-settlement.zip"
+	$(PYTHON) tools/package_zip.py
 
 clean:
 	rm -rf dist

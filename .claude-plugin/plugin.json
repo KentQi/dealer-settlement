@@ -1,6 +1,6 @@
 {
   "name": "dealer-settlement",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "铺货代销对账技能包：合同建档、月度对账 8 表工作簿、贴花计算与五层校验。",
   "author": {
     "name": "KentQi",
