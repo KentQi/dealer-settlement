@@ -304,9 +304,11 @@ def verify_packet(packet, cfg, paths, out_path):
               for item in redline), "redline_scan 结构错误")
     rl02 = next((item for item in redline if item.get("id") == "RL02"), None)
     check(rl02 is not None, "redline_scan 缺少 RL02（漏报/瞒报）规则")
-    check(any(hit.get("sheet") == "02-库存差异表" and hit.get("cell") == "C29"
-              for hit in rl02["hits"]),
-          "redline_scan 未命中 02-库存差异表!C29（漏报）")
+    # v1.4.0 起输出模板已移除「可能成因」等归因措辞，RL02 不应再命中 02 表；
+    # 保留该断言用于防回归——若文案重新引入「漏报/瞒报」类表述，此处会失败。
+    check(not any(hit.get("sheet") == "02-库存差异表" and hit.get("cell") == "C29"
+                  for hit in rl02["hits"]),
+          "输出仍含漏报/瞒报类红线措辞（02-库存差异表!C29），应改为中性表述")
 
     warnings = packet.get("warnings")
     check(isinstance(warnings, list), "复核包 warnings 必须是数组")

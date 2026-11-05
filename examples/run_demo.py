@@ -188,12 +188,12 @@ def verify_workbook(path, cfg, exp, generic=False, new_names=None):
         kpi_diff = _value_below(ws0, "库存差异（")
         check(approx(kpi_diff, abs(exp["diff_amt"])), f"00 KPI 差异金额 {kpi_diff} != {abs(exp['diff_amt'])}")
         concl3 = next((c.value for r in ws0.iter_rows() for c in r
-                       if isinstance(c.value, str) and "差异集中于" in c.value), "")
+                       if isinstance(c.value, str) and "逐 SKU 差异：" in c.value), "")
         check("+5 件" in concl3 and "-8 件" in concl3, f"00 结论 3 差异符号/数值错误：{concl3!r}")
         concl5 = next((c.value for r in ws0.iter_rows() for c in r
-                       if isinstance(c.value, str) and "本期应结算数量为" in c.value), "")
-        check(f"{exp['q10'] - exp['diff']} 件" in concl5,
-              f"00 结论 5 调整后数量错误：{concl5!r}")
+                       if isinstance(c.value, str) and "库存净差异" in c.value), "")
+        check(f"{exp['diff']:+d} 件" in concl5,
+              f"00 结论 5 净差异数值错误：{concl5!r}")
 
         # ---------- 01 对账单 ----------
         _, total_row = _find_row(ws1, lambda r: norm_label(r[0]) == "合计" and num(r[6]))
