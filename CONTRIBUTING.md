@@ -1,7 +1,7 @@
 # 贡献指南
 
 感谢参与 dealer-settlement。本仓库既是 **Agent Skill**，也是 **Agent Plugin**（Agent Plugins 1.0.0），
-任何改动都要同时满足两份规范。
+改动需同时满足两份规范的约束。
 
 ## 环境准备
 
@@ -21,7 +21,7 @@ make demo    # 生成演示数据并端到端跑通对账流程
 | `skills/dealer-settlement/references/` | 按需加载的参考文档 |
 | `skills/dealer-settlement/assets/` | 模板等静态资源 |
 | `examples/` | 演示数据生成器与端到端演示（CI 使用） |
-| `tools/` | 仓库校验脚本（不随插件分发） |
+| `tools/` | 仓库工具：`validate.py` 规范校验、`package_zip.py` 打包（不随插件分发） |
 
 ## 提交前检查
 

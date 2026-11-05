@@ -5,6 +5,22 @@
 
 ## [Unreleased]
 
+## [1.5.2] - 2026-11-05
+
+文档与实现对齐、公开文档表述清理。脚本行为无变化。
+
+### Fixed
+
+- **`references/故障与回滚.md`**：缺报告警条目仍写着旧行为「已按库存 0 计」，与 1.5.0 实现不符；改为实际文案「乙方本期未提供库存数据，不参与差异计算（非按 0 计）」并补处理方式。
+- **`references/复核协议.md` R5**：复核定位点原写「02『四、差异结论与处理建议』」，该节名与固定序号在 1.4.0 已取消；改为按标题定位「差异结论」节，并提示 02 各节序号按实际生成节数动态编排。
+- **`SKILL.md` 第 5 节**：贴花「兑付方式」与「展示」两处仍残留「净额参考 / 净额为负时提示确认兑付方向」，与 1.4.0 删除净额预设的口径矛盾；改为与对账单实际文案一致的表述（只列示计算结果，不预设应付净额）。
+
+### Changed
+
+- **公开文档表述清理**：去掉「任何实现该规范的客户端都能加载」这类绝对化说法，改为「按该规范加载插件的客户端即可安装」；`plugin.json` 英文描述由 `audit-grade validation` 改为 `five-layer deterministic validation`；SKILL.md 描述由「保证数字可审计」改为「保证数字可复核」，与「不构成审计意见」的免责一致。
+- **README**：删除「兼容的 harness」表格与「安装与快速开始」之间重复的安装命令（表格只留路由，命令集中在安装章节）；仓库结构补 `tools/`（校验 + 打包）与 CHANGELOG / CONTRIBUTING。
+- **文档去内部化**：移除只对项目内部有意义的时效性表述，改为通用、可独立理解的说明。
+
 ## [1.5.1] - 2026-11-05
 
 ### Fixed
@@ -124,17 +140,17 @@
 
 ### Fixed
 
-- **Claude Code 兼容层**：`.claude-plugin/marketplace.json` 的插件 `source` 由 `"."` 恢复为 `"./"`（`claude plugin validate` 只接受 `./` 开头的相对路径）；`.claude-plugin/plugin.json` 移除 `displayName`（当前 Claude Code 校验器报 `Unrecognized key`）。已在隔离 HOME 下实测 `claude plugin marketplace add` + `claude plugin install` 成功。
+- **Claude Code 兼容层**：`.claude-plugin/marketplace.json` 的插件 `source` 由 `"."` 恢复为 `"./"`（`claude plugin validate` 只接受 `./` 开头的相对路径）；`.claude-plugin/plugin.json` 移除 `displayName`（当前 Claude Code 校验器报 `Unrecognized key`）。已在隔离 HOME 下验证 `claude plugin marketplace add` + `claude plugin install` 成功。
 - **CI**：`actions/checkout`、`actions/setup-python`、`actions/upload-artifact` 升级到 v7（v4/v5 依赖已弃用的 Node 20）；Python 3.9 矩阵改为固定 `ubuntu-24.04`，因为 `ubuntu-latest`（26.04）没有 3.9 预编译包。
 - **规范校验器**：新增「`SKILL.md` 的 `metadata.version` 必须与 `plugin.json` 的 `version` 一致」校验，避免发布版本漂移。
 
 ## [1.1.0] - 2026-11-03
 
-本版本包含两项互相独立的改动：**打包层**从「单个 SKILL.md 仓库」升级为符合 Agent Plugins 1.0.0 的插件仓库；**脚本层**对 7 个 Python 脚本做了一轮审计式修复，并补齐可复现的演示与 CI。
+本版本包含两项互相独立的改动：**打包层**从「单个 SKILL.md 仓库」升级为符合 Agent Plugins 1.0.0 的插件仓库；**脚本层**对 7 个 Python 脚本做了一轮逐行审查与修复，并补齐可复现的演示与 CI。
 
 ### Added
 
-- **Agent Plugins 1.0.0 打包**：新增根目录 `plugin.json`（封闭字段集、规范 `$schema`），技能迁入规范固定位置 `skills/dealer-settlement/`，任何实现 Agent Plugins 1.0.0 的客户端都可发现本技能（官方兼容清单：<https://agent-plugins.org/compatible-clients>）。
+- **Agent Plugins 1.0.0 打包**：新增根目录 `plugin.json`（封闭字段集、规范 `$schema`），技能迁入规范固定位置 `skills/dealer-settlement/`，按 Agent Plugins 1.0.0 加载插件的客户端即可发现本技能（官方兼容清单：<https://agent-plugins.org/compatible-clients>）。
 - **Claude Code 兼容层**：新增 `.claude-plugin/plugin.json` 与 `.claude-plugin/marketplace.json`，支持 `claude plugin marketplace add` 一键安装，也支持 `claude --plugin-dir` 本地加载。
 - **单技能包构建**：`make package` 产出 `dist/dealer-settlement.zip`（技能目录位于 zip 根），保持 `unzip -d ~/.claude/skills/` 的传统安装方式可用。
 - **可复现演示**：`examples/make_demo_data.py` 生成自洽的演示主档与三份月度导出；`examples/run_demo.py` 在临时目录端到端跑通并自检（8 表、恒等式、贴花复算、失败路径 stdout=0、确定性、无网络），CI 直接调用。
@@ -158,10 +174,10 @@
 - **`apply_contract.py`（9 类）**：重复 `import re`；死表达式；期间「贴花金额」漏检（L2）；状态枚举与文档不一致（补「已签回 / 已收款」）；新合同编号覆盖第 2 行旧合同 → 改为追加行；备份时间戳声称毫秒实为截断 1 位 → 补足毫秒；保存失败裸 traceback → 提示备份位置；文件 / 工作簿句柄未关闭。
 - **`extract_contract.py`（5 类）**：docstring 未写 `.md` 支持；`.txt` / `.md` 仅 UTF-8，GBK 合同崩溃 → 编码兜底；损坏 `.docx`、文件不存在友好中止；PDF 全局状态跨调用污染 `needs_ocr`；输出文件句柄 / 目录不存在。
 - **`make_digest.py` / `make_confirm_html.py` / `make_master.py`（6 类）**：主档 / 候选 JSON 缺失或损坏时裸 traceback；输出目录不存在；工作簿与文件句柄未关闭；`make_master.py` docstring 与实际行为不符；重复 import。
-- **文档一致性**：六表表述、恒等式条数与 ①–⑦ 结转编号区分、确认字段数量（22 项）、红线编号 1–16 连续、8 张输出表名与 `create_sheet` 实测一致、断言符号、期间表「脚本自动追加」等错误表述。
+- **文档一致性**：六表表述、恒等式条数与 ①–⑦ 结转编号区分、确认字段数量（22 项）、红线编号 1–16 连续、8 张输出表名与 `create_sheet` 实际生成一致、断言符号、期间表「脚本自动追加」等错误表述。
 
 ### 已知限制
 
-- 真实 `.xls` 挂账样本尚未在真机实测（代码已按扩展名分派，`xlrd` 懒加载）；`.xlsx` / `.xlsm` 路径已在演示中覆盖。
+- 真实 `.xls` 挂账样本尚未验证（代码已按扩展名分派，`xlrd` 懒加载）；`.xlsx` / `.xlsm` 路径已在演示中覆盖。
 - 同一客户多份合同时，不带主键的合同字段仍写入第一份合同（合同编号已改为追加新行）；续签合同请走确认页人工确认。
 - 引擎对「多张同名候选工作表」改为严格中止（与文档一致），客户导出若混入辅助表需先规范表名。

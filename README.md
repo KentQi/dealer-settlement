@@ -31,7 +31,7 @@
                         L6 LLM 语义复核（R1–R10 清单）──▶ 08-复核记录 + 复核锁 ──▶ 交付
 ```
 
-- **确认单零文件操作**：确认页在浏览器里逐项确认后，用户只需回对话说一句「好了」；助手用 `locate_confirm.py` 自动从下载目录（或客户目录）找到确认单并归档，**不需要用户搬运/重命名 JSON**；支持 File System Access API 的浏览器还能直接存入客户目录
+- **确认单零文件操作**：确认页在浏览器里逐项确认后，用户只需回对话说一句「好了」；助手用 `locate_confirm.py` 自动从浏览器下载目录（或客户目录——即存放该客户资料的目录）找到确认单并归档，**不需要用户搬运/重命名 JSON**；支持 File System Access API 的浏览器，页面上还有「存到客户目录…」按钮可直接保存
 - **对账口径**：铺货代销、按实际动销结算；六条恒等式 + 贴花计算规则，含时点回加
 - **贴花模块**：按「结算类动销数量 × 当期生效标准」计算，SCD2 生效区间，脏值 / 区间重叠 / 缺失一律阻断
 - **五层确定性校验**：入口必填 → 写库类型 → 计算自检 → 结构守卫 → 输出防覆盖；失败时 stderr 给中文原因与可复制的修复命令，stdout 保持 0 字节
@@ -41,44 +41,50 @@
 
 ## 兼容的 harness
 
-Agent Plugins 1.0.0 的可移植核只定义 `plugin.json` + `skills/`（+ 可选 `mcp.json`），因此**任何实现该规范的客户端都能加载本仓库**。官方目前列出的兼容客户端包括：
+Agent Plugins 1.0.0 的可移植核只定义 `plugin.json` + `skills/`（+ 可选 `mcp.json`），本仓库不绑定特定客户端：只要客户端按该规范加载插件，就能把本仓库装进来。官方兼容清单目前列出：
 
 VS Code · Cursor · GitHub Copilot · ChatGPT & Codex · Kiro · Hermes Agent · OpenClaw · Grok Bot · NanoClaw · OpenHands · Perplexity Computer
 
 （完整清单与各客户端支持的组件：<https://agent-plugins.org/compatible-clients>）
 
-此外：
+按客户端类型分四条路：
 
-| Harness | 加载方式 |
+| Harness | 走哪条路 |
 |---|---|
-| 上述 Agent Plugins 客户端 | 把本仓库根目录作为插件包安装（含 `plugin.json` 与 `skills/`） |
-| Claude Code | `claude plugin marketplace add KentQi/dealer-settlement` 后 `claude plugin install dealer-settlement@dealer-settlement`；或本地 `claude --plugin-dir /path/to/dealer-settlement` |
-| 仅支持 Agent Skills 的 harness | 用 `make package` 生成 `dist/dealer-settlement.zip`（技能安装包），解压到该 harness 的 skills 根目录；同目录另有 `dealer-settlement-<版本>-source.zip` 完整源码包 |
-| WorkBuddy | `unzip dist/dealer-settlement.zip -d ~/.workbuddy/skills/` |
+| 上述 Agent Plugins 客户端 | 把仓库根目录（`plugin.json` + `skills/`）作为插件包加入其插件目录或市场 |
+| Claude Code | 作为插件安装，或本地 `--plugin-dir` 直接加载 |
+| 仅支持 Agent Skills 的 harness | 解压技能包到该 harness 的 skills 根目录 |
+| WorkBuddy | 解压技能包到 `~/.workbuddy/skills/` |
 
-技能内所有命令都用 `SKILL_DIR`（SKILL.md 所在目录）定位脚本，不依赖当前工作目录；同时给出 bash 与 PowerShell 写法（见 SKILL.md 第 0 节）。
+具体命令见下节。技能内所有命令都用 `SKILL_DIR`（SKILL.md 所在目录）定位脚本，不依赖当前工作目录；同时给出 bash 与 PowerShell 写法（见 SKILL.md 第 0 节）。
 
 ## 安装与快速开始
 
 ### 作为插件安装（推荐）
 
 ```bash
-# Claude Code：从本仓库安装插件
+# Claude Code：装成插件
 claude plugin marketplace add KentQi/dealer-settlement
 claude plugin install dealer-settlement@dealer-settlement
 
-# 其他 Agent Plugins 客户端：把仓库根目录作为插件包加入其插件目录/市场
+# Claude Code：不装市场，直接用本地仓库
+claude --plugin-dir /path/to/dealer-settlement
 ```
+
+其他 Agent Plugins 客户端把仓库根目录当作插件包，加到各自的插件目录或市场即可（见上表）。
 
 ### 作为单技能包安装
 
 ```bash
 make package    # 生成 dist/dealer-settlement.zip（技能包）+ dist/dealer-settlement-<版本>-source.zip（源码包）
+                # 没有 make 时等价命令：python3 tools/package_zip.py
 unzip dist/dealer-settlement.zip -d ~/.claude/skills/
 
 # 或直接软链（目录名必须保持 dealer-settlement）
 ln -s "$PWD/skills/dealer-settlement" ~/.claude/skills/dealer-settlement
 ```
+
+装到别的 harness 时把 `~/.claude/skills/` 换成该 harness 的 skills 根目录（WorkBuddy 为 `~/.workbuddy/skills/`）。
 
 ### 跑一遍可复现的演示
 
@@ -92,9 +98,9 @@ python3 examples/schema_demo.py   # 制造表名/列名/顺序漂移 → 自动�
 python3 examples/confirm_demo.py  # 确认页文案 → 自动定位确认单 → 归档写入主档
 ```
 
-演示数据全部生成在临时目录，不会写入任何客户目录。真实业务使用见 SKILL.md「3. 工作流」。
+演示数据全部生成在临时目录，不会写入任何业务目录。真实业务使用见 SKILL.md「3. 工作流」。
 
-依赖：`python3`（3.9+）+ `pip install -r requirements.txt`（openpyxl / xlrd / pdfplumber）。技能脚本纯本地执行，不访问网络。
+依赖：`python3` 3.9+，以及 `requirements.txt` 里的三个库（openpyxl / xlrd / pdfplumber）。技能脚本纯本地执行，不访问网络。
 
 ## 仓库结构
 
@@ -107,10 +113,11 @@ python3 examples/confirm_demo.py  # 确认页文案 → 自动定位确认单 �
 │   ├── references/                 # 主档设计 / 复核协议 / 数据映射 / 故障回滚（按需加载）
 │   └── assets/                     # 主档模板
 ├── examples/                       # 演示数据生成器 + 四套端到端演示（CI 使用）
-├── tools/validate.py               # 规范校验器（清单 / frontmatter / 引用）
+├── tools/                          # 仓库工具：规范校验 + 打包（不随技能分发）
 ├── .claude-plugin/                 # Claude Code 原生插件与 marketplace 清单（兼容层）
 ├── .github/workflows/ci.yml        # 多版本 Python CI
 ├── Makefile                        # make check / demo / package
+├── CHANGELOG.md / CONTRIBUTING.md
 └── requirements.txt
 ```
 
@@ -130,7 +137,7 @@ python3 examples/confirm_demo.py  # 确认页文案 → 自动定位确认单 �
 | 命令 | 作用 |
 |---|---|
 | `make check` | 校验 `plugin.json`、`SKILL.md` 是否符合 Agent Plugins / Agent Skills 规范，并做语法编译 |
-| `make demo` | 四套端到端演示：对账主流程、L6 LLM 复核门禁、结构漂移识别与映射确认、确认单自动定位 |
+| `make demo` | 跑四套端到端演示（见上「跑一遍可复现的演示」） |
 | `make package` | 构建两个包：`dist/dealer-settlement.zip`（技能安装包）、`dist/dealer-settlement-<版本>-source.zip`（完整源码）；文件名统一 UTF-8，跨平台解压不乱码 |
 | `make clean` | 清理构建产物与 `__pycache__` |
 
@@ -138,7 +145,7 @@ python3 examples/confirm_demo.py  # 确认页文案 → 自动定位确认单 �
 
 ## 适配边界
 
-仅适用「铺货代销 + 按实际动销结算 + 月末对账」；买断、按发货结算、退货冲减、返利/折让计价不在恒等式覆盖内。单据版式按某化妆品品牌经销商场景打磨，换行业需复核版式。
+仅适用「铺货代销 + 按实际动销结算 + 月末对账」；买断、按发货结算、退货冲减、返利/折让计价不在恒等式覆盖内。单据版式按化妆品类经销商的常见单据形态打磨，换行业需复核版式。
 
 ## 数据与安全
 
