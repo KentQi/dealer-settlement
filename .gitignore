@@ -10,6 +10,26 @@ venv/
 # 打包产物（make package）
 dist/
 
+# 真实业务数据默认不入库：对账输入（合同 / 导出）与输出（工作簿 / 复核包）
+# 需要提交演示文件时用 git add -f，并在 PR 说明其全部为虚构数据
+*.xlsx
+*.xls
+*.xlsm
+*.pdf
+*.docx
+*.csv
+!skills/dealer-settlement/assets/*.xlsx
+
+# 技能运行时产物
+_备份/
+_确认记录/
+_复核记录/
+_数据映射.json
+_确认页_*.html
+复核包*.json
+复核包*.md
+*.bak
+
 # 演示脚本的临时输出
 /examples/_out/
 

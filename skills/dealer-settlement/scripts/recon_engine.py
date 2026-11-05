@@ -568,23 +568,6 @@ def _iso_day(value):
     return ""
 
 
-UNIT = {"示例面膜A（盒装5片）": "盒", "示例面膜B（盒装5片）": "套",
-        "示例精华油": "瓶", "示例面膜C（盒装5片）": "盒",
-        "示例颈膜（盒装5片）": "盒", "示例面膜D（盒装5片）": "盒",
-        "示例面霜": "瓶", "示例乳液": "瓶",
-        "示例精华水": "瓶", "示例油敷膜（盒装5片·限定版）": "盒",
-        "示例精粹水140ml": "瓶", "示例面膜E（盒装5片）": "盒",
-        "示例面膜F（盒装5片·二版）": "盒", "示例精华蜜15ml": "盒",
-        "示例精华蜜套装15ml*4": "盒"}
-
-NAME_NOTE = {
-    "示例面膜B（盒装5片）": "乙方系统括号为半角",
-    "示例面膜C（盒装5片）": "乙方系统品名含空格",
-    "示例油敷膜（盒装5片·限定版）": "甲方含“（限定版）”后缀",
-    "示例精华蜜15ml": "乙方系统品名含空格",
-    "示例精华蜜套装15ml*4": "乙方系统品名含空格",
-}
-
 _PART = {}
 
 def _bail(msg):
@@ -945,7 +928,7 @@ for x in jia:
     theo = x["qty"] - q10                 # 甲方账面 10/31 结存
     adj  = iv["qty"] + q11                # 乙方库存回加导出日前已销
     diff = adj - theo
-    _note = NAME_NOTE.get(x["name"], "")
+    _note = ""
     if not _note and not iv.get("_absent") and norm(iv["name"]) != norm(x["name"]):
         _note = f"乙方系统品名：{iv['name']}"
     if not _note and iv.get("_absent"):
@@ -953,7 +936,7 @@ for x in jia:
     _ms = MS_BAR.get(bar, {})
     rows.append(dict(name=x["name"], bar=bar,
                      spec=(_ms.get("spec") or iv["spec"]),
-                     unit=(_ms.get("unit") or oct_unit.get(bar) or UNIT.get(x["name"], "—")),
+                     unit=(_ms.get("unit") or oct_unit.get(bar) or "—"),
                      price=x["price"], retail=iv["retail"], q0=x["qty"], q10=q10, q11=q11,
                      theo=theo, act=iv["qty"], adj=adj, diff=diff,
                      diff_amt=round(diff * x["price"], 2),

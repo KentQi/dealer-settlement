@@ -1,11 +1,11 @@
 ---
 name: dealer-settlement
-description: 铺货代销（代销 / 铺货）对账作业包，覆盖六件事：① 从经销合同识别关键字段、生成 HTML 确认页、经人工逐项确认后写入客户主档（六表）；② 用客户主档 + 当期三份导出（甲方挂账、乙方销售流水、乙方库存）生成 8 表对账工作簿；③ 五层确定性校验（L1–L5）保证数字可复核、缺失即阻断；④ L6 LLM 语义复核：交付前按 R1–R10 复核，结论与哈希锁写入工作簿 08-复核记录；⑤ 结构漂移识别与映射确认：表名 / 字段名 / 列顺序不一致时先探查、经用户逐项确认后生成 _数据映射.json；⑥ 确认单零文件操作：确认页提交后助手自动定位并归档，无需用户手动搬文件。当用户要求「识别合同 / 建客户档 / 做合同台账」「某月对账 / 算应结算金额 / 核对库存 / 出对账单 / 算贴花」「复核本次出账 / 验收 / 按审计口径检查」或询问「怎么操作 / 需要准备什么材料」，以及提到「字段名不一致 / 表名不一致 / 列顺序不同 / 表头识别 / 映射确认」「确认页提交 / 自动定位确认单 / 不用手动搬文件」时使用。判据与校验通用，但单据版式与披露文案按「品牌方 × 经销商（示例）」场景打磨，换客户首次出账需复核版式。
+description: 铺货代销（代销 / 铺货）对账作业包，覆盖六件事：① 从经销合同识别关键字段、生成 HTML 确认页、经人工逐项确认后写入客户主档（六表）；② 用客户主档 + 当期三份导出（甲方挂账、乙方销售流水、乙方库存）生成 8 表对账工作簿；③ 五层确定性校验（L1–L5）让每个数字可复核、缺失即阻断；④ L6 LLM 语义复核：交付前按 R1–R10 复核，结论与哈希锁写入工作簿 08-复核记录；⑤ 结构漂移识别与映射确认：表名 / 字段名 / 列顺序不一致时先探查、经用户逐项确认后生成 _数据映射.json；⑥ 确认单零文件操作：确认页提交后助手自动定位并归档，无需用户手动搬文件。当用户要求「识别合同 / 建客户档 / 做合同台账」「某月对账 / 算应结算金额 / 核对库存 / 出对账单 / 算贴花」「复核本次出账 / 验收 / 按审计口径检查」或询问「怎么操作 / 需要准备什么材料」，以及提到「字段名不一致 / 表名不一致 / 列顺序不同 / 表头识别 / 映射确认」「确认页提交 / 自动定位确认单 / 不用手动搬文件」时使用。判据与校验通用，但单据版式与披露文案按「品牌方 × 经销商（示例）」场景打磨，换客户首次出账需复核版式。
 license: MIT
 compatibility: Requires Python 3.9+ with openpyxl, xlrd (>=2.0, .xls read) and pdfplumber, plus read/write access to the customer workbook folder. Optional — Excel/WPS/LibreOffice to open generated .xlsx; OCR tooling only for scanned contracts. L6 review runs in the harness LLM (scripts never call a model) and needs workbook read + file write; without write access, output the report JSON for manual archiving. Commands are shown in bash with PowerShell equivalents for Windows.
 metadata:
   author: KentQi
-  version: "1.5.2"
+  version: "1.5.3"
 ---
 
 # 铺货代销全流程：建档 → 确认 → 对账 → 校验 → 复核
@@ -297,7 +297,7 @@ Windows / PowerShell 见第 0 节；`--out` 属于 `load_master.py`，`recon_eng
 
 ## 7. 红线
 
-每条都对应一次真实返工。
+每条都对应一类被反复验证过的失败模式。
 
 **建档阶段（1–4）**
 
