@@ -647,6 +647,26 @@ def _parse_day(value):
     return None
 
 
+_LOT_SEP = re.compile(r"[/／|｜]")
+
+
+def _split_lot(value):
+    """批次字段常写成「批次号/有效期」合体（如 R0320B11/20290319）。
+
+    返回 (批次号, 有效期或 None)：右段能解析成日期才拆，否则整串当批次号，
+    避免把「A/2026」这类非日期批次误拆。
+    """
+    txt = "" if value is None else str(value).strip()
+    if not txt:
+        return "", None
+    parts = [x.strip() for x in _LOT_SEP.split(txt) if x.strip()]
+    if len(parts) >= 2:
+        exp = _parse_day(parts[-1])
+        if exp is not None:
+            return "/".join(parts[:-1]), exp
+    return txt, None
+
+
 def _add_months(day, months):
     """生产日期 + 保质期(月) → 到期日；月末按当月最后一天收敛。"""
     y, m = divmod(day.month - 1 + int(months), 12)
@@ -664,15 +684,15 @@ for _ri, r in enumerate(_jia_mat[_hr0 + 1:], _hr0 + 2):
         continue
     if nm in ("合计", "小计", "总计", "合 计"):
         continue
-    _lot = _cell_of(r, c_lot) if c_lot is not None else None
-    _exp = _cell_of(r, c_exp) if c_exp is not None else None
+    _lot, _lot_exp = _split_lot(_cell_of(r, c_lot) if c_lot is not None else None)
+    _exp = (_parse_day(_cell_of(r, c_exp)) if c_exp is not None else None) or _lot_exp
     _jia_raw.append(dict(name=nm,
                          price=round(_num_val(_cell_of(r, c_price), f"甲方挂账第 {_ri} 行·单价"), 2),
                          amt=round(_num_val(_cell_of(r, c_amt), f"甲方挂账第 {_ri} 行·未结算金额"), 2),
                          qty=int(round(_num_val(_cell_of(r, c_qty), f"甲方挂账第 {_ri} 行·未结算数量"))),
                          init=int(round(_num_val(_cell_of(r, c_init), f"甲方挂账第 {_ri} 行·初始数量"))),
-                         lot="" if _lot is None else str(_lot).strip(),
-                         exp=_parse_day(_exp),
+                         lot=_lot,
+                         exp=_exp,
                          kind=_kind_of(_cell_of(r, c_kind) if c_kind is not None else None)))
 
 # 物料属性三态：未登记取值一律阻断，不默认成正装或促销
@@ -1042,9 +1062,14 @@ if not BATCH and _P_BATCH and os.path.exists(_P_BATCH):
         _bb = "" if _bb is None else str(_bb).strip()
         if _bb.endswith(".0") and _bb[:-2].isdigit():
             _bb = _bb[:-2]
-        _lot_v = _cell_of(_r, q_lot) if q_lot is not None else None
+        _lot_v, _lot_exp = _split_lot(_cell_of(_r, q_lot) if q_lot is not None else None)
+        if _exp is None:
+            _exp = _lot_exp
+        if _exp is None:
+            _q_bad += 1
+            continue
         BATCH.append(dict(name=str(_nm).strip(), bar=_bb,
-                          lot=("" if _lot_v is None else str(_lot_v).strip()) or "（未标批次）",
+                          lot=_lot_v or "（未标批次）",
                           exp=_exp,
                           qty=int(round(_num_val(_cell_of(_r, q_qty), f"批次表第 {_ri} 行·数量"))),
                           init=0, price=0.0))

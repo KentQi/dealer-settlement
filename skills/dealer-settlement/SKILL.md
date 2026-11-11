@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires Python 3.9+ with openpyxl, xlrd (>=2.0, .xls read) and pdfplumber, plus read/write access to the customer workbook folder. Optional — Excel/WPS/LibreOffice to open generated .xlsx; OCR tooling only for scanned contracts. L6 review runs in the harness LLM (scripts never call a model) and needs workbook read + file write; without write access, output the report JSON for manual archiving. Commands are shown in bash with PowerShell equivalents for Windows.
 metadata:
   author: KentQi
-  version: "1.6.0"
+  version: "1.6.1"
 ---
 
 # 铺货代销全流程：建档 → 确认 → 对账 → 校验 → 复核
@@ -111,7 +111,7 @@ py -3 "$SKILL_DIR\scripts\recon_engine.py"
 
 | 列名（含关键词即可） | 取值 | 作用 |
 |---|---|---|
-| `批次号` / `批次` / `批号` | 任意文本 | 批次维度；同品名多批次按行展开 |
+| `批次号` / `批次` / `批号` | 任意文本，可写成 `批次号/有效期` 合体（如 `R0320B11/20290319`） | 批次维度；合体时自动拆成批次号与有效期；同品名多批次按行展开 |
 | `有效期` / `到期日` / `失效日期` | 日期 / Excel 日期 / `YYYY-MM-DD` | 效期分档；也可只给 `生产日期`+`保质期` |
 | `物料属性` / `物料类型` | 正装 / 试用装 / 中小样 / 配赠 / 陈列 | 非正装不参与货款结算，另出附表 09 |
 

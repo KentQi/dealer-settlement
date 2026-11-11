@@ -458,6 +458,46 @@ def main(argv=None):
         # ---------- 7. 静态无网络 ----------
         static_no_network()
 
+        # ---------- 8b. 批次字段合写「批次号/有效期」----------
+        tmp3 = tempfile.mkdtemp(prefix="dealer_settlement_demo_lot_")
+        try:
+            root3, paths3 = make_demo_data.build(os.path.join(tmp3, "铺货代销客户"))
+            wbj = openpyxl.load_workbook(paths3["jia"])
+            wsj = wbj.active
+            head3 = [c.value for c in wsj[2]]
+            i_lot = head3.index("批次号") + 1
+            i_exp = head3.index("有效期至") + 1
+            for rr in range(3, wsj.max_row + 1):
+                v = wsj.cell(row=rr, column=i_exp).value
+                lot_v = wsj.cell(row=rr, column=i_lot).value
+                if v and lot_v:
+                    d = v.replace("-", "") if isinstance(v, str) else v.strftime("%Y%m%d")
+                    wsj.cell(row=rr, column=i_lot, value="%s/%s" % (lot_v, d))
+            wsj.delete_cols(i_exp)          # 只留合写的「批次」列
+            wbj.save(paths3["jia"])
+            wbj.close()
+
+            p = run_script([LOAD_MASTER, os.path.join(root3, "_主档.xlsx"),
+                            "--period", PERIOD, "--asof", ASOF], cwd=tmp3)
+            check(p.returncode == 0, f"合写批次场景 load_master 失败：{_text(p.stderr)[:400]}")
+            cfg_lot = json.loads(_text(p.stdout))
+            p = run_script([ENGINE], cfg_lot, cwd=tmp3)
+            check(p.returncode == 0, f"合写批次场景引擎失败：{_text(p.stderr)[-1500:]}")
+            out3 = os.path.join(cfg_lot["base_dir"], cfg_lot["period"]["out_name"])
+            wb3 = openpyxl.load_workbook(out3, data_only=True)
+            try:
+                # 有效期是日期单元格（datetime），不能只取 str，否则取不到日期文本
+                t8c = "\n".join(str(c.value) for r in wb3["08-效期预警"].iter_rows()
+                                 for c in r if c.value not in (None, ""))
+                check("B1-202611" in t8c, "合写批次未拆出批次号（应为 B1-202611）")
+                check("2026-11-20" in t8c, "合写批次未拆出有效期（应为 2026-11-20）")
+                check("B1-202611/" not in t8c, "合写字段未被拆分，批次号仍带着日期")
+                check("批次结存与账面逐条码一致" in t8c, "合写批次场景批次结存勾稽失败")
+            finally:
+                wb3.close()
+        finally:
+            shutil.rmtree(tmp3, ignore_errors=True)
+
         # ---------- 8. 乙方提供使用数据的分支（试用装/中小样/配赠）----------
         tmp2 = tempfile.mkdtemp(prefix="dealer_settlement_demo_use_")
         try:
