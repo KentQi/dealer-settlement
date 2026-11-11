@@ -605,6 +605,7 @@ c_init = _src_col("jia", "init", _h0, ["初始数量", "初始"], c_qty)
 c_lot = _src_col("jia", "lot", _h0, ["批次号", "批次", "批号"], None)
 c_exp = _src_col("jia", "exp", _h0, ["有效期", "到期日", "失效日期"], None)
 c_kind = _src_col("jia", "kind", _h0, ["物料属性", "物料类型", "品项类型", "商品类型"], None)
+c_code = _src_col("jia", "code", _h0, ["物料编码", "客户物料号", "物料编号", "商品编码"], None)
 
 _KIND_RULES = (("试用", "试用装"), ("小样", "中小样"), ("赠品", "配赠"),
                ("配赠", "配赠"), ("促销", "配赠"), ("陈列", "陈列"),
@@ -691,6 +692,8 @@ for _ri, r in enumerate(_jia_mat[_hr0 + 1:], _hr0 + 2):
                          amt=round(_num_val(_cell_of(r, c_amt), f"甲方挂账第 {_ri} 行·未结算金额"), 2),
                          qty=int(round(_num_val(_cell_of(r, c_qty), f"甲方挂账第 {_ri} 行·未结算数量"))),
                          init=int(round(_num_val(_cell_of(r, c_init), f"甲方挂账第 {_ri} 行·初始数量"))),
+                         code="" if c_code is None or _cell_of(r, c_code) is None
+                              else str(_cell_of(r, c_code)).strip(),
                          lot=_lot,
                          exp=_exp,
                          kind=_kind_of(_cell_of(r, c_kind) if c_kind is not None else None)))
@@ -741,7 +744,8 @@ BATCH = []
 for _x in _jia_settle:
     if (not _x["lot"] and not _x["exp"]) or _x["qty"] <= 0:
         continue
-    BATCH.append(dict(name=_x["name"], bar="", lot=_x["lot"] or "（未标批次）",
+    BATCH.append(dict(name=_x["name"], bar="", code=_x.get("code", ""),
+                      lot=_x["lot"] or "（未标批次）",
                       exp=_x["exp"], qty=_x["qty"], init=_x["init"], price=_x["price"]))
 _BATCH_FROM_JIA = bool(BATCH)
 
@@ -1003,9 +1007,51 @@ if _mp2 and os.path.exists(_mp2):
         _bail(f"主档 SKU 表读取失败（{_e}）：结算属性三态校验与条码全集依赖该表，已阻断")
 
 
-def resolve_sku(name):
-    """条码优先 → 主档别名反查 → 品名归一化。返回 (库存行, 依据)。"""
+# ---------- 条码 ↔ 物料编码对照（可选；挂账表只有物料编码时用它兜住匹配）----------
+BARCODE_MAP, MAP_SRC = {}, ""
+_P_MAP = _src_file("barcode_map", (CFG.get("sources") or {}).get("barcode_map") or "")
+if _P_MAP and os.path.exists(_P_MAP):
+    _mmx = _read_matrix(_P_MAP, sheet=_src_entry("barcode_map").get("sheet"), role="barcode_map")
+    _mhr, _mhd = _src_header_rows(_mmx, "barcode_map", ["条码", "物料编码"])
+    m_bar = _src_col("barcode_map", "bar", _mhd, ["商品条码", "条码", "国际条码"], 0,
+                     label="对照表·条码列")
+    m_code = _src_col("barcode_map", "code", _mhd, ["物料编码", "客户物料号", "物料编号", "商品编码"], 1,
+                      label="对照表·物料编码列")
+    _dup = []
+    for _ri, _r in enumerate(_mmx[_mhr + 1:], _mhr + 2):
+        _vb = _cell_of(_r, m_bar)
+        _vc = _cell_of(_r, m_code)
+        _vb = "" if _vb is None else str(_vb).strip()
+        _vc = "" if _vc is None else str(_vc).strip()
+        if _vb.endswith(".0") and _vb[:-2].isdigit():
+            _vb = _vb[:-2]
+        if not _vb and not _vc:
+            continue
+        if not _vb or not _vc:
+            print(f"⚠ 对照表第 {_ri} 行条码或物料编码为空，已跳过")
+            continue
+        if _vc in BARCODE_MAP and BARCODE_MAP[_vc] != _vb:
+            _dup.append((_vc, BARCODE_MAP[_vc], _vb))
+        else:
+            BARCODE_MAP[_vc] = _vb
+    if _dup:
+        _bail("条码对照表存在一对多：" + "；".join("%s→%s / %s" % x for x in _dup[:5])
+              + "。同一物料编码只能对应一个商品条码，请先修正对照表")
+    MAP_SRC = os.path.basename(_P_MAP)
+    print(f"条码对照：{len(BARCODE_MAP)} 条（{MAP_SRC}）")
+
+
+def _bar_of(code):
+    """物料编码 → 商品条码（对照表未提供或未命中时返回空串）。"""
+    return BARCODE_MAP.get(str(code).strip(), "") if code else ""
+
+
+def resolve_sku(name, code=""):
+    """条码优先 → 物料编码对照 → 主档别名反查 → 品名归一化。返回 (库存行, 依据)。"""
     k = norm(name)
+    _mb = _bar_of(code)
+    if _mb and _mb in inv_by_bar:
+        return inv_by_bar[_mb], "物料编码"
     for cand in (oct_by_name.get(k), MS_ALIAS.get(k), MS_NAME.get(k)):
         if cand and cand in inv_by_bar:
             return inv_by_bar[cand], "条码"
@@ -1044,6 +1090,7 @@ if not BATCH and _P_BATCH and os.path.exists(_P_BATCH):
     q_mfg = _src_col("batch", "mfg", _bhd, ["生产日期", "生产"], None)
     q_days = _src_col("batch", "shelf", _bhd, ["保质期"], None)
     q_qty = _src_col("batch", "qty", _bhd, ["库存数量", "数量", "库存"], None)
+    q_code = _src_col("batch", "code", _bhd, ["物料编码", "客户物料号", "物料编号"], None)
     _q_bad = 0
     for _ri, _r in enumerate(_bmx[_bhr + 1:], _bhr + 2):
         _nm = _cell_of(_r, q_name)
@@ -1062,6 +1109,8 @@ if not BATCH and _P_BATCH and os.path.exists(_P_BATCH):
         _bb = "" if _bb is None else str(_bb).strip()
         if _bb.endswith(".0") and _bb[:-2].isdigit():
             _bb = _bb[:-2]
+        if not _bb and q_code is not None:
+            _bb = _bar_of(_cell_of(_r, q_code))
         _lot_v, _lot_exp = _split_lot(_cell_of(_r, q_lot) if q_lot is not None else None)
         if _exp is None:
             _exp = _lot_exp
@@ -1083,8 +1132,8 @@ if not BATCH:
 # 批次与促销物料的条码补齐（挂账表行按品名，主档/库存/销售三处反查）
 for _b in BATCH:
     if not _b["bar"]:
-        _b["bar"] = (oct_by_name.get(norm(_b["name"])) or MS_ALIAS.get(norm(_b["name"]))
-                     or MS_NAME.get(norm(_b["name"])) or "")
+        _b["bar"] = (_bar_of(_b.get("code", "")) or oct_by_name.get(norm(_b["name"]))
+                     or MS_ALIAS.get(norm(_b["name"])) or MS_NAME.get(norm(_b["name"])) or "")
 for _k, _p in PROMO.items():
     _p["bar"] = (oct_by_name.get(_k) or MS_ALIAS.get(_k) or MS_NAME.get(_k) or "")
 
@@ -1122,8 +1171,8 @@ if not MS_BAR:
     _bail("主档 SKU 表未读到任何条码，无法判定结算属性与条码全集，已阻断。请核对主档路径与「SKU」表。")
 if MS_BAR:
     for x in jia:
-        _b = (oct_by_name.get(norm(x["name"])) or MS_ALIAS.get(norm(x["name"]))
-              or MS_NAME.get(norm(x["name"])) or "")
+        _b = (_bar_of(x.get("code", "")) or oct_by_name.get(norm(x["name"]))
+              or MS_ALIAS.get(norm(x["name"])) or MS_NAME.get(norm(x["name"])) or "")
         _a = MS_BAR.get(_b, {}).get("attr") if _b else None
         if _a not in ("结算类", "非结算类"):
             _uncls.append((x["name"], _b or "（无条码）", _a or "空"))
@@ -1139,8 +1188,8 @@ if _uncls:
           f"空值不会被默认成结算类，请先补主档 SKU 表再对账")
 
 for x in jia:
-    k = norm(x["name"]); iv, _how = resolve_sku(x["name"])
-    if iv is not None and _how == "条码" and norm(iv["name"]) != k:
+    k = norm(x["name"]); iv, _how = resolve_sku(x["name"], x.get("code", ""))
+    if iv is not None and _how in ("条码", "物料编码") and norm(iv["name"]) != k:
         print(f"⚠ 挂账「{x['name']}」与库存「{iv['name']}」品名不同，已按条码匹配")
     if iv is None:
         _missing.append(x["name"])

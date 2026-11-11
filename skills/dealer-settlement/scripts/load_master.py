@@ -254,6 +254,8 @@ def main():
             # 可选源：批次效期表、乙方试用装使用表。缺省为空 → 引擎按「未提供」处理，不猜
             "batch": pick([("效期", None), ("批次", None), ("生产日期", None)], ""),
             "promo_use": pick([("使用", None), ("领用", None)], ""),
+            "barcode_map": pick([("条码对照", None), ("编码对照", None),
+                                 ("物料编码", None), ("条码映射", None)], ""),
         },
     }
     if mapping is not None:

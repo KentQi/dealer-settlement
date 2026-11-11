@@ -474,8 +474,39 @@ def main(argv=None):
                     d = v.replace("-", "") if isinstance(v, str) else v.strftime("%Y%m%d")
                     wsj.cell(row=rr, column=i_lot, value="%s/%s" % (lot_v, d))
             wsj.delete_cols(i_exp)          # 只留合写的「批次」列
+            # 再加「物料编码」列，并把品名截断成匹配不上的样子，逼引擎走条码对照
+            col_code = wsj.max_column + 1
+            wsj.cell(row=2, column=col_code, value="物料编码")
+            code_of = {}
+            for rr in range(3, wsj.max_row + 1):
+                nm = wsj.cell(row=rr, column=1).value
+                if not nm:
+                    continue
+                bar = [k for k, v in {"690000000001": "示例面膜A（盒装5片）",
+                                      "690000000002": "示例面膜B（盒装5片）",
+                                      "690000000005": "示例颈膜（盒装5片）",
+                                      "690000000012": "示例面膜E（盒装5片）",
+                                      "690000000010": "示例油敷膜（盒装5片·限定版）",
+                                      "690000000020": "示例精华蜜15ml"}.items() if v == nm]
+                if not bar:
+                    continue
+                code = "M" + bar[0][-6:]
+                code_of[bar[0]] = code
+                wsj.cell(row=rr, column=col_code, value=code)
+                wsj.cell(row=rr, column=1, value=nm[:6] + "…")
             wbj.save(paths3["jia"])
             wbj.close()
+
+            # 商品条码 ↔ 物料编码对照表
+            wbm = openpyxl.Workbook()
+            wsm = wbm.active
+            wsm.title = "对照"
+            wsm.append(["商品条码", "物料编码", "备注"])
+            for bar, code in code_of.items():
+                wsm.append([bar, code, "演示"])
+            map_path = os.path.join(os.path.dirname(paths3["jia"]), "商品条码-物料编码对照.xlsx")
+            wbm.save(map_path)
+            wbm.close()
 
             p = run_script([LOAD_MASTER, os.path.join(root3, "_主档.xlsx"),
                             "--period", PERIOD, "--asof", ASOF], cwd=tmp3)
@@ -493,6 +524,9 @@ def main(argv=None):
                 check("2026-11-20" in t8c, "合写批次未拆出有效期（应为 2026-11-20）")
                 check("B1-202611/" not in t8c, "合写字段未被拆分，批次号仍带着日期")
                 check("批次结存与账面逐条码一致" in t8c, "合写批次场景批次结存勾稽失败")
+                check(cfg_lot["sources"].get("barcode_map"), "load_master 未识别条码对照表")
+                check("物料编码" in _text(p.stderr) or "条码对照" in _text(p.stderr),
+                      "引擎未使用条码对照（品名已被截断）")
             finally:
                 wb3.close()
         finally:

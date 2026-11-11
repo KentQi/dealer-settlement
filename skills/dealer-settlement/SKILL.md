@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires Python 3.9+ with openpyxl, xlrd (>=2.0, .xls read) and pdfplumber, plus read/write access to the customer workbook folder. Optional — Excel/WPS/LibreOffice to open generated .xlsx; OCR tooling only for scanned contracts. L6 review runs in the harness LLM (scripts never call a model) and needs workbook read + file write; without write access, output the report JSON for manual archiving. Commands are shown in bash with PowerShell equivalents for Windows.
 metadata:
   author: KentQi
-  version: "1.6.1"
+  version: "1.6.2"
 ---
 
 # 铺货代销全流程：建档 → 确认 → 对账 → 校验 → 复核
@@ -106,6 +106,7 @@ py -3 "$SKILL_DIR\scripts\recon_engine.py"
 |---|---|---|
 | `效期` / `批次` / `生产日期` | 甲方批次效期表（挂账表无批次列时使用） | 「甲方-20261102批次效期.xlsx」 |
 | `使用` / `领用` | 乙方试用装 / 中小样 / 配赠使用明细 | 「乙方-202610试用装使用.xlsx」 |
+| `条码对照` / `编码对照` / `物料编码` | 商品条码 ↔ 物料编码对照（挂账表无条码列时必填） | 「商品条码-物料编码对照.xlsx」 |
 
 甲方挂账表可选带三列，引擎自动识别（缺列则按旧行为）：
 
@@ -114,6 +115,7 @@ py -3 "$SKILL_DIR\scripts\recon_engine.py"
 | `批次号` / `批次` / `批号` | 任意文本，可写成 `批次号/有效期` 合体（如 `R0320B11/20290319`） | 批次维度；合体时自动拆成批次号与有效期；同品名多批次按行展开 |
 | `有效期` / `到期日` / `失效日期` | 日期 / Excel 日期 / `YYYY-MM-DD` | 效期分档；也可只给 `生产日期`+`保质期` |
 | `物料属性` / `物料类型` | 正装 / 试用装 / 中小样 / 配赠 / 陈列 | 非正装不参与货款结算，另出附表 09 |
+| `物料编码` / `客户物料号` / `物料编号` | 任意文本 | 经「条码对照表」映射成商品条码；挂账表无条码列时按此匹配主档 |
 
 - `.xls` 用 `xlrd` 读；`.xlsx` 用 `openpyxl`（`openpyxl` 不支持 `.xls`）。
 - 表名与列名不写死：引擎按关键词找工作表、按表头关键词定位列。找不到或多张候选时会**中止并列出候选**，不会猜。
