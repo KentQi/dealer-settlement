@@ -8,8 +8,8 @@
   2. 生成复核包，断言 figures 与 demo 已知值一致（期初 1360 件/31,610.00 元；结算
      450 件/10,825.00 元；差异 -3 件/-217.50 元；贴花 980.00 元；回加 39 件/825.00 元）、
      checklist 10 项、schema 正确；两次生成除 generated_at 外完全一致；
-  3. 固定 fixture 报告（通过）→ --apply exit 0；出现 08-复核记录（8→9 张）、
-     其余 8 张表逐单元格不变；归档 JSON/MD + 复核锁存在；--check exit 0；重复 --apply 幂等；
+  3. 固定 fixture 报告（通过）→ --apply exit 0；出现 10-复核记录（10→11 张）、
+     其余 10 张表逐单元格不变；归档 JSON/MD + 复核锁存在；--check exit 0；重复 --apply 幂等；
   4. verdict=不通过 报告 + 哈希匹配 → --apply exit 1，仅归档、不写 08 表；
   5. 篡改工作簿（openpyxl 改一格另存）→ --check exit 1；报告哈希不匹配 → --apply exit 1；
   6. 校验规则负例：缺 R10 / 有阻断却判通过 / 有条件通过无 summary / 未知 id 仅警告 /
@@ -45,7 +45,8 @@ import review_common as rc  # noqa: E402
 import openpyxl  # noqa: E402
 
 SHEETS = ["00-对账说明", "01-对账单", "02-库存差异表", "03-源数据对照",
-          "04-甲方挂账明细", "05-乙方销售汇总", "06-乙方库存明细", "07-乙方销售流水"]
+          "04-甲方挂账明细", "05-乙方销售汇总", "06-乙方库存明细", "07-乙方销售流水",
+          "08-效期预警", "09-试用装与配赠"]
 PERIOD = "202610"
 ASOF = "2026-11-02"
 PERIOD_START = "2026-10-01"
@@ -182,7 +183,7 @@ def build_workbook(tmpdir):
           % (process.returncode, _text(process.stderr)[-1500:]))
     out_path = os.path.join(cfg["base_dir"], cfg["period"]["out_name"])
     check(os.path.isfile(out_path), "引擎未生成输出工作簿：%s" % out_path)
-    check(_sheet_names(out_path) == SHEETS, "引擎输出不是预期的 8 张表：%s" % _sheet_names(out_path))
+    check(_sheet_names(out_path) == SHEETS, "引擎输出不是预期的 10 张表：%s" % _sheet_names(out_path))
     return cfg, paths, out_path
 
 
@@ -452,7 +453,7 @@ def main(argv=None):
         check(process.returncode == 1, "verdict=不通过 时 --apply 应 exit 1，实际 rc=%s"
               % process.returncode)
         check("阻断" in _text(process.stderr), "不通过报告 stderr 未说明阻断")
-        check(rc.REVIEW_SHEET not in _sheet_names(fresh), "不通过报告不应写 08 表")
+        check(rc.REVIEW_SHEET not in _sheet_names(fresh), "不通过报告不应写复核记录表")
         check(_sha(fresh) == original_sha, "不通过报告不应改写工作簿")
         fail_archive = os.path.join(fresh_dir, rc.REVIEW_DIR)
         check(os.path.isdir(fail_archive), "不通过报告未归档")
@@ -508,7 +509,7 @@ def main(argv=None):
         check(process.returncode == 1, "报告哈希不匹配时 --apply 应 exit 1，实际 rc=%s"
               % process.returncode)
         check("不一致" in _text(process.stderr), "报告哈希不匹配未给出中文原因")
-        check(rc.REVIEW_SHEET not in _sheet_names(fresh2), "报告哈希不匹配不应写 08 表")
+        check(rc.REVIEW_SHEET not in _sheet_names(fresh2), "报告哈希不匹配不应写复核记录表")
         check(not os.path.isdir(os.path.join(fresh2_dir, rc.REVIEW_DIR)),
               "报告哈希不匹配不应归档")
 
@@ -569,7 +570,7 @@ def main(argv=None):
 
         ok = True
         print("[review_demo] OK")
-        print("  对账工作簿 : 8 表，sha256=%s…（load_master → recon_engine rc=0）"
+        print("  对账工作簿 : 10 表，sha256=%s…（load_master → recon_engine rc=0）"
               % original_sha[:16])
         print("  复核包     : schema=%s；figures 期初 %s 件/%s 元、结算 %s 件/%s 元、"
               "差异 %s 件/%s 元、贴花 %s 元、回加 %s 件/%s 元；checklist 10 项"
@@ -581,8 +582,8 @@ def main(argv=None):
                  _num(packet["figures"]["tiehua_total"]),
                  _num(packet["figures"]["addback_qty"]),
                  _num(packet["figures"]["addback_amount"])))
-        print("  08 表      : 8→9 张，复核人/模型/时间/结论/被复核哈希/报告名/清单 10 项/问题表/"
-              "免责声明齐全；其余 8 表逐单元格不变")
+        print("  复核记录表 : 10→11 张，复核人/模型/时间/结论/被复核哈希/报告名/清单 10 项/问题表/"
+              "免责声明齐全；其余 10 表逐单元格不变")
         print("  复核锁     : pre_sha256=%s… post_sha256=%s…（与归档报告、08 表互相绑定）"
               % (lock["pre_sha256"][:16], lock["post_sha256"][:16]))
         print("  --check    : 复核有效；篡改工作簿 / 改写 08 表 → exit 1（防审旧交新生效）")

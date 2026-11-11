@@ -25,7 +25,9 @@ RESULTS = ("通过", "不通过", "不适用")
 DELIVERABLE_VERDICTS = ("通过", "有条件通过")
 
 # ---- 复核记录（工作簿第 9 张表）----
-REVIEW_SHEET = "08-复核记录"
+REVIEW_SHEET = "10-复核记录"
+# 兼容旧工作簿：1.6.0 之前复核记录是第 9 张（08-复核记录）
+LEGACY_REVIEW_SHEETS = ("08-复核记录",)
 REVIEW_DIR = "_复核记录"
 LOCK_NAME = "复核锁.json"
 

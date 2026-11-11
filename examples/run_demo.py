@@ -37,7 +37,8 @@ import make_demo_data  # noqa: E402
 import openpyxl  # noqa: E402
 
 SHEETS = ["00-对账说明", "01-对账单", "02-库存差异表", "03-源数据对照",
-          "04-甲方挂账明细", "05-乙方销售汇总", "06-乙方库存明细", "07-乙方销售流水"]
+          "04-甲方挂账明细", "05-乙方销售汇总", "06-乙方库存明细", "07-乙方销售流水",
+          "08-效期预警", "09-试用装与配赠"]
 PERIOD = "202610"
 ASOF = "2026-11-02"
 
@@ -175,10 +176,11 @@ def verify_cfg(cfg, customer_root):
 def verify_workbook(path, cfg, exp, generic=False, new_names=None):
     wb = openpyxl.load_workbook(path, data_only=True)
     try:
-        check(wb.sheetnames == SHEETS, f"工作表不是预期的 8 张：{wb.sheetnames}")
+        check(wb.sheetnames == SHEETS, f"工作表不是预期的 10 张：{wb.sheetnames}")
         ws0, ws1, ws2, ws3 = wb["00-对账说明"], wb["01-对账单"], wb["02-库存差异表"], wb["03-源数据对照"]
         ws4, ws5, ws6, ws7 = (wb["04-甲方挂账明细"], wb["05-乙方销售汇总"],
                               wb["06-乙方库存明细"], wb["07-乙方销售流水"])
+        ws8, ws9 = wb["08-效期预警"], wb["09-试用装与配赠"]
 
         # ---------- 00 封面 / KPI ----------
         check(any(isinstance(c.value, str) and f"{cfg['period']['period_cn']}  铺货代销对账报告" in c.value
@@ -307,6 +309,22 @@ def verify_workbook(path, cfg, exp, generic=False, new_names=None):
                       if isinstance(c.value, str) and "核对说明" in c.value), "")
         check("未作去重" in note7, f"07 拆行说明未声明口径：{note7!r}")
 
+        # ---------- 08 效期预警 ----------
+        t8 = "\n".join(str(c.value) for r in ws8.iter_rows() for c in r if isinstance(c.value, str))
+        check("附 表 08" in t8, "08 表标题缺失")
+        for tier in ("已过期", "30 天内", "90 天内", "180 天内", "正常"):
+            check(tier in t8, f"08 表缺少效期分档：{tier}")
+        check("FIFO" in t8, "08 表缺少 FIFO 口径说明")
+        check("后进先出迹象" in t8, "08 表未识别出后进先出迹象（夹具已构造该场景）")
+        check("批次结存与账面逐条码一致" in t8, "08 表未完成批次结存与账面勾稽")
+
+        # ---------- 09 试用装与配赠 ----------
+        t9 = "\n".join(str(c.value) for r in ws9.iter_rows() for c in r if isinstance(c.value, str))
+        check("附 表 09" in t9, "09 表标题缺失")
+        for kind in ("试用装", "中小样", "配赠"):
+            check(kind in t9, f"09 表缺少物料属性：{kind}")
+        check("不参与货款结算" in t9, "09 表未声明不参与货款结算")
+
         if generic:
             values = [c.value for ws in wb.worksheets for row in ws.iter_rows() for c in row]
             for old in ("示例品牌方有限公司", "示例经销商有限公司", "HT-DEMO-2026-001"):
@@ -381,8 +399,19 @@ def main(argv=None):
         check("[新建]" in _text(p.stdout), "首次生成应为 [新建] 标记")
         check("出现多行" in stderr, "多行库存聚合告警未触发")
 
-        # ---------- 3. 8 表与恒等式 ----------
+        # ---------- 3. 10 表与恒等式 ----------
         verify_workbook(out_path, cfg, exp)
+        wb_tmp = openpyxl.load_workbook(out_path, data_only=True)
+        try:
+            t8 = "\n".join(str(c.value) for r in wb_tmp["08-效期预警"].iter_rows()
+                            for c in r if isinstance(c.value, str))
+            check("910 件" in t8, "08 表期末结存合计应为 910 件（= 账面理论结存）")
+            t9 = "\n".join(str(c.value) for r in wb_tmp["09-试用装与配赠"].iter_rows()
+                            for c in r if isinstance(c.value, str))
+            check("1,150 件" in t9, "09 表促销物料出库合计应为 1,150 件")
+            check("乙方未提供使用数据" in t9, "未生成使用表时应走「未提供」分支")
+        finally:
+            wb_tmp.close()
 
         # ---------- 4. 失败路径：退出码非 0 且 stdout 0 字节 ----------
         for label, cfg_bad, needle in (
@@ -429,11 +458,36 @@ def main(argv=None):
         # ---------- 7. 静态无网络 ----------
         static_no_network()
 
+        # ---------- 8. 乙方提供使用数据的分支（试用装/中小样/配赠）----------
+        tmp2 = tempfile.mkdtemp(prefix="dealer_settlement_demo_use_")
+        try:
+            root2, _ = make_demo_data.build(os.path.join(tmp2, "铺货代销客户"), with_promo_use=True)
+            p = run_script([LOAD_MASTER, os.path.join(root2, "_主档.xlsx"),
+                            "--period", PERIOD, "--asof", ASOF], cwd=tmp2)
+            check(p.returncode == 0, f"使用表场景 load_master 失败：{_text(p.stderr)[:400]}")
+            cfg_use = json.loads(_text(p.stdout))
+            check(cfg_use["sources"].get("promo_use"), "load_master 未识别试用装使用表")
+            p = run_script([ENGINE], cfg_use, cwd=tmp2)
+            check(p.returncode == 0, f"使用表场景引擎失败：{_text(p.stderr)[-1500:]}")
+            out2 = os.path.join(cfg_use["base_dir"], cfg_use["period"]["out_name"])
+            wb2 = openpyxl.load_workbook(out2, data_only=True)
+            try:
+                t9b = "\n".join(str(c.value) for r in wb2["09-试用装与配赠"].iter_rows()
+                                 for c in r if isinstance(c.value, str))
+                check("乙方使用表" in t9b, "09 表未标注乙方使用数据来源")
+                check("乙方已提供使用数据" in t9b, "09 表未进入「已提供」分支")
+                check("1,150 件" in t9b, "09 表出库合计异常")
+                check("差异不计算" not in t9b, "已提供使用数据时不应出现「差异不计算」")
+            finally:
+                wb2.close()
+        finally:
+            shutil.rmtree(tmp2, ignore_errors=True)
+
         ok = True
         print("[run_demo] OK")
         print(f"  load_master : rc=0，月份目录={os.path.basename(cfg['base_dir'])}，"
               f"源文件={cfg['sources']['jia']} / {cfg['sources']['sales']} / {cfg['sources']['inventory']}")
-        print(f"  recon_engine: rc=0，自检通过（残差 0.00），8 表 = {', '.join(SHEETS)}")
+        print(f"  recon_engine: rc=0，自检通过（残差 0.00），10 表 = {', '.join(SHEETS)}")
         print(f"  关键数      : 期初 {exp['q0']} 件/{exp['open']:.2f} 元；"
               f"结算 {exp['q10']} 件/{exp['settle']:.2f} 元；"
               f"差异 {exp['diff']:+d} 件/{exp['diff_amt']:.2f} 元；"

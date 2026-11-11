@@ -159,8 +159,10 @@ def drift_jia(path):
     check(header[:5] == ["商品名称", "单价", "未结算金额", "未结算数量", "初始数量"],
           "演示挂账表头与预期不符：%r" % (header[:5],))
     title, data = rows[0][0], rows[2:]
-    source_order = [0, 3, 1, 2, 4]  # 商品、数量、供货价、金额、期初数量
-    new_headers = ["商品", "数量", "供货价", "金额", "期初数量", "备注"]
+    # 商品、数量、供货价、金额、期初数量 + 批次号、有效期至、物料属性（原样搬过去，避免漂移丢列）
+    source_order = [0, 3, 1, 2, 4, 5, 6, 7]
+    new_headers = ["商品", "数量", "供货价", "金额", "期初数量",
+                   "批次号", "有效期至", "物料属性", "备注"]
     drifted = openpyxl.Workbook()
     sheet = drifted.active
     sheet.title = JIA_SHEET_DRIFT
@@ -171,7 +173,7 @@ def drift_jia(path):
         for column, source in enumerate(source_order, 1):
             sheet.cell(row=row_index, column=column,
                        value=row[source] if source < len(row) else None)
-        sheet.cell(row=row_index, column=6, value="")
+        sheet.cell(row=row_index, column=9, value="")
     drifted.save(path)
 
 

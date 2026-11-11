@@ -34,15 +34,17 @@ from openpyxl.utils import get_column_letter
 
 try:  # 脚本目录即 sys.path[0]；作为模块被导入时兜底
     from review_common import (
-        DELIVERABLE_VERDICTS, LEVELS, LOCK_NAME, REQUIRED_IDS, REQUIRED_ITEMS,
-        RESULTS, REVIEW_DIR, REVIEW_SHEET, SCHEMA_PACKET, SCHEMA_REPORT, VERDICTS,
+        DELIVERABLE_VERDICTS, LEGACY_REVIEW_SHEETS, LEVELS, LOCK_NAME,
+        REQUIRED_IDS, REQUIRED_ITEMS, RESULTS, REVIEW_DIR, REVIEW_SHEET,
+        SCHEMA_PACKET, SCHEMA_REPORT, VERDICTS,
         iso_now, load_json, parse_iso8601, sha256_file,
     )
 except ImportError:  # pragma: no cover - 仅异常运行方式触发
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from review_common import (
-        DELIVERABLE_VERDICTS, LEVELS, LOCK_NAME, REQUIRED_IDS, REQUIRED_ITEMS,
-        RESULTS, REVIEW_DIR, REVIEW_SHEET, SCHEMA_PACKET, SCHEMA_REPORT, VERDICTS,
+        DELIVERABLE_VERDICTS, LEGACY_REVIEW_SHEETS, LEVELS, LOCK_NAME,
+        REQUIRED_IDS, REQUIRED_ITEMS, RESULTS, REVIEW_DIR, REVIEW_SHEET,
+        SCHEMA_PACKET, SCHEMA_REPORT, VERDICTS,
         iso_now, load_json, parse_iso8601, sha256_file,
     )
 
@@ -175,9 +177,10 @@ def _section(ws, row, text):
 
 
 def write_review_sheet(wb, report, pre_sha, archive_name, packet_name, workbook_name):
-    """写入/更新「08-复核记录」工作表（只动这一张表，其余表原样）。"""
-    if REVIEW_SHEET in wb.sheetnames:
-        del wb[REVIEW_SHEET]
+    """写入/更新「10-复核记录」工作表（只动这一张表，其余表原样）。"""
+    for _name in (REVIEW_SHEET,) + LEGACY_REVIEW_SHEETS:
+        if _name in wb.sheetnames:
+            del wb[_name]
     ws = wb.create_sheet(REVIEW_SHEET)
     for index, width in enumerate(SHEET_WIDTHS, 1):
         ws.column_dimensions[get_column_letter(index)].width = width
@@ -289,12 +292,21 @@ def write_review_sheet(wb, report, pre_sha, archive_name, packet_name, workbook_
     return ws
 
 
+def _review_sheet_of(wb):
+    """复核记录工作表名：优先新名，兼容旧工作簿的 08-复核记录。"""
+    for name in (REVIEW_SHEET,) + LEGACY_REVIEW_SHEETS:
+        if name in wb.sheetnames:
+            return name
+    return ""
+
+
 def _read_review_sheet(wb):
-    """从 08 表读取被复核哈希与复核结论（--check 用）。"""
+    """从复核记录表读取被复核哈希与复核结论（--check 用）。"""
     info = {}
-    if REVIEW_SHEET not in wb.sheetnames:
+    _name = _review_sheet_of(wb)
+    if not _name:
         return info
-    ws = wb[REVIEW_SHEET]
+    ws = wb[_name]
     for row in ws.iter_rows():
         for cell in row:
             if not isinstance(cell.value, str):
@@ -556,7 +568,7 @@ def _is_idempotent(workbook_path, archive_dir, report, current_sha):
     except Exception:  # noqa: BLE001
         return False
     try:
-        return REVIEW_SHEET in wb.sheetnames
+        return bool(_review_sheet_of(wb))
     finally:
         wb.close()
 
@@ -638,7 +650,7 @@ def do_check(workbook_path, archive_dir):
         wb = None
     if wb is not None:
         try:
-            if REVIEW_SHEET not in wb.sheetnames:
+            if not _review_sheet_of(wb):
                 errors.append("工作簿缺少「%s」工作表（未执行 --apply，或该表已被删除）" % REVIEW_SHEET)
             else:
                 info = _read_review_sheet(wb)

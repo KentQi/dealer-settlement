@@ -35,17 +35,18 @@ import openpyxl
 
 try:  # 脚本目录即 sys.path[0]；作为模块被导入时兜底
     from review_common import (
-        REVIEW_SHEET, SCHEMA_PACKET, REQUIRED_ITEMS, REVIEW_DIR,
+        LEGACY_REVIEW_SHEETS, REVIEW_SHEET, SCHEMA_PACKET, REQUIRED_ITEMS, REVIEW_DIR,
         iso_now, sha256_file,
     )
 except ImportError:  # pragma: no cover - 仅异常运行方式触发
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from review_common import (
-        REVIEW_SHEET, SCHEMA_PACKET, REQUIRED_ITEMS, REVIEW_DIR,
+        LEGACY_REVIEW_SHEETS, REVIEW_SHEET, SCHEMA_PACKET, REQUIRED_ITEMS, REVIEW_DIR,
         iso_now, sha256_file,
     )
 
 CODE = chr(96)  # Markdown 行内代码标记；用常量而非字面反引号，便于源码审阅
+_REVIEW_SHEET_NAMES = (REVIEW_SHEET,) + LEGACY_REVIEW_SHEETS
 
 
 def _code(text):
@@ -691,7 +692,7 @@ def _scan_cross_refs(wb, warnings):
             prefix_map[match.group(1)] = name
     missing = []
     for ws in wb.worksheets:
-        if ws.title == REVIEW_SHEET:
+        if ws.title in _REVIEW_SHEET_NAMES:
             continue
         for row in ws.iter_rows():
             for cell in row:
@@ -726,7 +727,7 @@ def _scan_redline(wb):
         hits = []
         regex = re.compile(pattern)
         for ws in wb.worksheets:
-            if ws.title == REVIEW_SHEET:
+            if ws.title in _REVIEW_SHEET_NAMES:
                 continue
             for row in ws.iter_rows():
                 for cell in row:
@@ -960,7 +961,7 @@ def build_packet(workbook_path, master_path=None):
             warnings.append("工作簿含 %d 个公式单元格；复核包按缓存值取数，无缓存值的公式会表现为 null"
                             "（请用 Excel 打开并保存一次后重新生成复核包）" % formula_count)
 
-        if REVIEW_SHEET in wb.sheetnames:
+        if any(_n in wb.sheetnames for _n in (REVIEW_SHEET,) + LEGACY_REVIEW_SHEETS):
             warnings.append("工作簿已含「%s」表；复核包基于当前文件生成，重新复核请确认被复核版本"
                             % REVIEW_SHEET)
 

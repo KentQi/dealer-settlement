@@ -251,6 +251,9 @@ def main():
             "jia": pick([("挂账", None)], "甲方-挂账.xls"),
             "sales": pick([("销售数据", None), ("销售", "库存")], "乙方-销售数据.xlsx"),
             "inventory": pick([("库存", None)], "乙方-库存.xlsx"),
+            # 可选源：批次效期表、乙方试用装使用表。缺省为空 → 引擎按「未提供」处理，不猜
+            "batch": pick([("效期", None), ("批次", None), ("生产日期", None)], ""),
+            "promo_use": pick([("使用", None), ("领用", None)], ""),
         },
     }
     if mapping is not None:

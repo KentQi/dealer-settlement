@@ -227,7 +227,7 @@ def _src_file(role, default_name):
     entry = _src_entry(role)
     hint = entry.get("file")
     if not hint:
-        return os.path.join(BASE, default_name)
+        return os.path.join(BASE, default_name) if default_name else ""
     hint = str(hint)
     if os.path.isabs(hint):
         candidates = [hint]
@@ -601,6 +601,60 @@ c_price = _src_col("jia", "price", _h0, ["单价", "供货价"], 1, label="甲�
 c_amt = _src_col("jia", "amount", _h0, ["未结算金额", "金额"], 2, label="甲方挂账·金额列")
 c_qty = _src_col("jia", "qty", _h0, ["未结算数量", "数量"], 3, label="甲方挂账·数量列")
 c_init = _src_col("jia", "init", _h0, ["初始数量", "初始"], c_qty)
+# 新的甲方挂账表会带批次号 / 有效期 / 物料属性；缺列时按旧行为（正装、无批次）
+c_lot = _src_col("jia", "lot", _h0, ["批次号", "批次", "批号"], None)
+c_exp = _src_col("jia", "exp", _h0, ["有效期", "到期日", "失效日期"], None)
+c_kind = _src_col("jia", "kind", _h0, ["物料属性", "物料类型", "品项类型", "商品类型"], None)
+
+_KIND_RULES = (("试用", "试用装"), ("小样", "中小样"), ("赠品", "配赠"),
+               ("配赠", "配赠"), ("促销", "配赠"), ("陈列", "陈列"),
+               ("正装", "正装"), ("正常", "正装"))
+_KINDS = ("正装", "试用装", "中小样", "配赠", "陈列")
+_PROMO_KINDS = ("试用装", "中小样", "配赠")
+
+
+def _kind_of(value):
+    """物料属性归一化；空值按正装（与旧版一致），未登记取值留给上层阻断。"""
+    s_ = "" if value is None else str(value).strip()
+    if not s_:
+        return "正装"
+    for key, name in _KIND_RULES:
+        if key in s_:
+            return name
+    return s_
+
+
+def _parse_day(value):
+    """日期解析：datetime / date / Excel 序列号 / 常见字符串；识别不了返回 None。"""
+    if value in (None, ""):
+        return None
+    if isinstance(value, _datetime):
+        return value.date()
+    if isinstance(value, _date):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            return (_datetime(1899, 12, 30) + _timedelta(days=float(value))).date()
+        except (OverflowError, ValueError):
+            return None
+    txt = str(value).strip()
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d", "%Y%m%d",
+                "%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S"):
+        try:
+            return _datetime.strptime(txt, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _add_months(day, months):
+    """生产日期 + 保质期(月) → 到期日；月末按当月最后一天收敛。"""
+    y, m = divmod(day.month - 1 + int(months), 12)
+    y += day.year
+    m += 1
+    last = [31, 29 if (y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)) else 28,
+            31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1]
+    return _date(y, m, min(day.day, last))
 
 _jia_raw = []
 for _ri, r in enumerate(_jia_mat[_hr0 + 1:], _hr0 + 2):
@@ -610,22 +664,66 @@ for _ri, r in enumerate(_jia_mat[_hr0 + 1:], _hr0 + 2):
         continue
     if nm in ("合计", "小计", "总计", "合 计"):
         continue
+    _lot = _cell_of(r, c_lot) if c_lot is not None else None
+    _exp = _cell_of(r, c_exp) if c_exp is not None else None
     _jia_raw.append(dict(name=nm,
                          price=round(_num_val(_cell_of(r, c_price), f"甲方挂账第 {_ri} 行·单价"), 2),
                          amt=round(_num_val(_cell_of(r, c_amt), f"甲方挂账第 {_ri} 行·未结算金额"), 2),
                          qty=int(round(_num_val(_cell_of(r, c_qty), f"甲方挂账第 {_ri} 行·未结算数量"))),
-                         init=int(round(_num_val(_cell_of(r, c_init), f"甲方挂账第 {_ri} 行·初始数量")))))
+                         init=int(round(_num_val(_cell_of(r, c_init), f"甲方挂账第 {_ri} 行·初始数量"))),
+                         lot="" if _lot is None else str(_lot).strip(),
+                         exp=_parse_day(_exp),
+                         kind=_kind_of(_cell_of(r, c_kind) if c_kind is not None else None)))
 
-# 同品名多行（拆行/重复挂账）按数量合计，避免动销被双算
+# 物料属性三态：未登记取值一律阻断，不默认成正装或促销
+_bad_kinds = sorted({x["kind"] for x in _jia_raw if x["kind"] not in _KINDS})
+if _bad_kinds:
+    _bail("甲方挂账表「物料属性」出现未登记取值：" + "、".join(_bad_kinds)
+          + "。仅接受 正装／试用装／中小样／配赠／陈列（空值按正装），请补全源表后再对账")
+
+# 同品名多批次（新挂账表按批次展开）属正常拆行，不做“重复挂账”告警
+_HAS_LOT = any(x["lot"] for x in _jia_raw)
+_jia_settle = [x for x in _jia_raw if x["kind"] not in _PROMO_KINDS]
+_jia_promo = [x for x in _jia_raw if x["kind"] in _PROMO_KINDS]
+
+# 同品名多行按数量合计，避免动销被双算
 jia, _jm = [], {}
-for _x in _jia_raw:
+for _x in _jia_settle:
     _k = norm(_x["name"])
     if _k in _jm:
         _o = _jm[_k]
-        print(f"⚠ 挂账表中「{_x['name']}」出现多行，已按数量合计")
+        if not _HAS_LOT:
+            print(f"⚠ 挂账表中「{_x['name']}」出现多行，已按数量合计")
         _o["qty"] += _x["qty"]; _o["init"] += _x["init"]; _o["amt"] = round(_o["amt"] + _x["amt"], 2)
+        _o["lots"].append((_x["lot"], _x["exp"], _x["qty"]))
     else:
-        _jm[_k] = _x; jia.append(_x)
+        _jm[_k] = dict(_x, lots=[(_x["lot"], _x["exp"], _x["qty"])])
+        jia.append(_jm[_k])
+
+# 促销物料（试用装 / 中小样 / 配赠）：不参与货款结算与库存恒等式，另出附表 09
+PROMO = {}
+for _x in _jia_promo:
+    _k = norm(_x["name"])
+    if _k in PROMO:
+        _p = PROMO[_k]
+        _p["out_qty"] += _x["qty"]
+        _p["amt"] = round(_p["amt"] + _x["amt"], 2)
+        if _p["kind"] != _x["kind"]:
+            print(f"⚠ 促销物料「{_x['name']}」存在多个物料属性（{_p['kind']} / {_x['kind']}），已按首次出现归类")
+    else:
+        PROMO[_k] = dict(name=_x["name"], kind=_x["kind"], out_qty=_x["qty"],
+                         amt=_x["amt"], price=_x["price"], bar="")
+    if _x["lot"] or _x["exp"]:
+        PROMO[_k].setdefault("lots", []).append((_x["lot"], _x["exp"], _x["qty"]))
+
+# 批次明细（仅正装）：促销物料是否入库不确定，不纳入效期预警
+BATCH = []
+for _x in _jia_settle:
+    if (not _x["lot"] and not _x["exp"]) or _x["qty"] <= 0:
+        continue
+    BATCH.append(dict(name=_x["name"], bar="", lot=_x["lot"] or "（未标批次）",
+                      exp=_x["exp"], qty=_x["qty"], init=_x["init"], price=_x["price"]))
+_BATCH_FROM_JIA = bool(BATCH)
 
 # ---------- 乙方库存（表名与列均按关键词识别；有映射时按映射）----------
 wb1 = openpyxl.load_workbook(_P_INV, data_only=True)
@@ -744,6 +842,8 @@ o_spec = _src_col("sales", "spec", _hoct, ["规格"], 5)
 o_unit = _src_col("sales", "unit", _hoct, ["单位"], 6)
 o_num = _src_col("sales", "qty", _hoct, ["销售数量", "数量", "销量"], 7, label="销售流水·数量列")
 o_brand = _src_col("sales", "brand", _hoct, ["品牌"], 8)
+o_kind = _src_col("sales", "kind", _hoct, ["赠品", "试用", "物料属性", "物料类型"], None)
+_sales_use = defaultdict(int)
 
 detail = []
 oct_qty, oct_store = defaultdict(int), defaultdict(lambda: defaultdict(int))
@@ -774,6 +874,10 @@ for _ri, r in enumerate(ws_oct.iter_rows(min_row=_hr3 + 1, values_only=True), _h
     oct_spec[_bar] = _spec if _spec is not None else ""
     oct_unit[_bar] = _unit if _unit is not None else ""
     oct_by_name[norm(_cell_of(r, o_name))] = _bar
+    if o_kind is not None:
+        _kv = _cell_of(r, o_kind)
+        if _kv and any(_w in str(_kv) for _w in ("赠品", "试用", "小样", "配赠", "促销")):
+            _sales_use[_bar] += q
 
 # ---- 数据覆盖披露（动态）：有记录日期区间 + 期间内缺哪几天 ----
 _dates_seen = sorted({_iso_day(d[1]) for d in detail if _iso_day(d[1])})
@@ -890,6 +994,100 @@ def resolve_sku(name):
         return iv, "品名"
     return None, "未匹配"
 
+def _shelf_months(value):
+    """保质期解析：'36' / '36个月' / '3年' → 月数；识别不了返回 None。"""
+    if value in (None, ""):
+        return None
+    txt = str(value)
+    m = re.search(r"(\d+(?:\.\d+)?)", txt)
+    if not m:
+        return None
+    n = float(m.group(1))
+    if "年" in txt:
+        n *= 12
+    elif "天" in txt:
+        n = n / 30.0
+    return n
+
+
+# ---------- 批次效期：优先挂账表的批次/有效期列，其次可选批次表 ----------
+_P_BATCH = _src_file("batch", (CFG.get("sources") or {}).get("batch") or "")
+BATCH_SRC = "甲方挂账表（批次号／有效期列）" if _BATCH_FROM_JIA else ""
+BATCH_NOTE = ""
+if not BATCH and _P_BATCH and os.path.exists(_P_BATCH):
+    _bmx = _read_matrix(_P_BATCH, sheet=_src_entry("batch").get("sheet"), role="batch")
+    _bhr, _bhd = _src_header_rows(_bmx, "batch", ["商品名称", "数量"])
+    q_bar = _src_col("batch", "bar", _bhd, ["条码", "编码"], 0)
+    q_name = _src_col("batch", "name", _bhd, ["商品名称", "名称", "品名"], 1)
+    q_lot = _src_col("batch", "lot", _bhd, ["批次号", "批次", "批号"], None)
+    q_exp = _src_col("batch", "exp", _bhd, ["有效期", "到期日", "失效"], None)
+    q_mfg = _src_col("batch", "mfg", _bhd, ["生产日期", "生产"], None)
+    q_days = _src_col("batch", "shelf", _bhd, ["保质期"], None)
+    q_qty = _src_col("batch", "qty", _bhd, ["库存数量", "数量", "库存"], None)
+    _q_bad = 0
+    for _ri, _r in enumerate(_bmx[_bhr + 1:], _bhr + 2):
+        _nm = _cell_of(_r, q_name)
+        if not _nm:
+            continue
+        _exp = _parse_day(_cell_of(_r, q_exp)) if q_exp is not None else None
+        if _exp is None and q_mfg is not None and q_days is not None:
+            _mfg = _parse_day(_cell_of(_r, q_mfg))
+            _mon = _shelf_months(_cell_of(_r, q_days))
+            if _mfg and _mon:
+                _exp = _add_months(_mfg, _mon)
+        if _exp is None:
+            _q_bad += 1
+            continue
+        _bb = _cell_of(_r, q_bar)
+        _bb = "" if _bb is None else str(_bb).strip()
+        if _bb.endswith(".0") and _bb[:-2].isdigit():
+            _bb = _bb[:-2]
+        _lot_v = _cell_of(_r, q_lot) if q_lot is not None else None
+        BATCH.append(dict(name=str(_nm).strip(), bar=_bb,
+                          lot=("" if _lot_v is None else str(_lot_v).strip()) or "（未标批次）",
+                          exp=_exp,
+                          qty=int(round(_num_val(_cell_of(_r, q_qty), f"批次表第 {_ri} 行·数量"))),
+                          init=0, price=0.0))
+    BATCH_SRC = "甲方批次效期表：" + os.path.basename(_P_BATCH)
+    if _q_bad:
+        print(f"⚠ 批次表有 {_q_bad} 行取不到有效期（也无法由生产日期＋保质期推算），已跳过，请核对源表")
+if not BATCH:
+    BATCH_NOTE = ("本期未提供批次效期数据：甲方挂账表无「批次号／有效期」列，"
+                  "且未提供批次效期表，故未生成效期预警")
+
+# 批次与促销物料的条码补齐（挂账表行按品名，主档/库存/销售三处反查）
+for _b in BATCH:
+    if not _b["bar"]:
+        _b["bar"] = (oct_by_name.get(norm(_b["name"])) or MS_ALIAS.get(norm(_b["name"]))
+                     or MS_NAME.get(norm(_b["name"])) or "")
+for _k, _p in PROMO.items():
+    _p["bar"] = (oct_by_name.get(_k) or MS_ALIAS.get(_k) or MS_NAME.get(_k) or "")
+
+# ---------- 乙方试用装/中小样/配赠使用数据：使用表优先，其次销售流水标记行 ----------
+_P_USE = _src_file("promo_use", (CFG.get("sources") or {}).get("promo_use") or "")
+PROMO_USE, PROMO_USE_SRC = {}, ""
+if _P_USE and os.path.exists(_P_USE):
+    _umx = _read_matrix(_P_USE, sheet=_src_entry("promo_use").get("sheet"), role="promo_use")
+    _uhr, _uhd = _src_header_rows(_umx, "promo_use", ["商品名称", "数量"])
+    u_bar = _src_col("promo_use", "bar", _uhd, ["条码", "编码"], 0)
+    u_name = _src_col("promo_use", "name", _uhd, ["商品名称", "名称", "品名"], 1)
+    u_qty = _src_col("promo_use", "qty", _uhd, ["使用数量", "领用数量", "数量"], None)
+    for _ri, _r in enumerate(_umx[_uhr + 1:], _uhr + 2):
+        if not _cell_of(_r, u_name):
+            continue
+        _ub = _cell_of(_r, u_bar)
+        _ub = "" if _ub is None else str(_ub).strip()
+        if _ub.endswith(".0") and _ub[:-2].isdigit():
+            _ub = _ub[:-2]
+        _uq = int(round(_num_val(_cell_of(_r, u_qty), f"使用表第 {_ri} 行·数量")))
+        _uk = _ub or norm(_cell_of(_r, u_name))
+        PROMO_USE[_uk] = PROMO_USE.get(_uk, 0) + _uq
+    PROMO_USE_SRC = "乙方使用表：" + os.path.basename(_P_USE)
+elif _sales_use:
+    PROMO_USE = dict(_sales_use)
+    PROMO_USE_SRC = "乙方销售流水中的赠品／试用标记行"
+
+
 
 # ==================== 核心计算 ====================
 rows = []
@@ -975,6 +1173,70 @@ Q0_P       = sum(r["q0"] for r in _prov)
 Q10_P      = sum(r["q10"] for r in _prov)
 _absent_end = round(sum(r["q0"] * r["price"] - r["settle"] - r["q11"] * r["price"]
                         for r in rows if r.get("absent")), 2)
+
+# ---------- 效期：期末批次结存（本期动销按有效期升序 FIFO 扣减）----------
+_EXP_BASE = _date.fromisoformat(str(P_END)[:10])
+_q10_by_bar = {r["bar"]: r["q10"] for r in rows if r["bar"]}
+_theo_by_bar = {r["bar"]: r["theo"] for r in rows if r["bar"]}
+
+FIFO_ISSUES = []
+_by_bar_lot = defaultdict(list)
+for _b in BATCH:
+    _by_bar_lot[_b["bar"] or norm(_b["name"])].append(_b)
+for _key, _lst in _by_bar_lot.items():
+    _lst.sort(key=lambda z: (z["exp"], str(z["lot"])))
+    _need = max(_q10_by_bar.get(_key, 0), 0)
+    for _b in _lst:
+        _take = min(_b["qty"], _need)
+        _b["used"] = _take
+        _b["left"] = _b["qty"] - _take
+        _need -= _take
+    if _need > 0:
+        print(f"⚠ 「{_lst[0]['name']}」批次数量不足以扣减本期动销，缺口 {_need} 件，请核对批次数据")
+    # 系统核销口径：后批次已扣减、而更早批次仍有余额 → 与先进先出不符
+    _consumed = [i for i, b in enumerate(_lst) if b["init"] and b["qty"] < b["init"]]
+    if _consumed:
+        _viol = [b for b in _lst[:min(_consumed)] if b["qty"] > 0]
+        if _viol:
+            FIFO_ISSUES.append((_lst[0]["name"], [b["lot"] for b in _viol],
+                                [b["lot"] for b in _lst[min(_consumed):]
+                                 if b["init"] and b["qty"] < b["init"]]))
+if FIFO_ISSUES:
+    for _n, _earlier, _later in FIFO_ISSUES[:8]:
+        print(f"⚠ FIFO 校验：「{_n}」较早批次（{'、'.join(_earlier[:3])}）仍有余额，"
+              f"但较晚批次（{'、'.join(_later[:3])}）已发生扣减，存在后进先出迹象")
+
+for _b in BATCH:
+    _b["days"] = (_b["exp"] - _EXP_BASE).days
+    _b["tier"] = ("已过期" if _b["days"] < 0 else
+                  "30 天内" if _b["days"] <= 30 else
+                  "90 天内" if _b["days"] <= 90 else
+                  "180 天内" if _b["days"] <= 180 else "正常（>180 天）")
+EXP_TIERS = ["已过期", "30 天内", "90 天内", "180 天内", "正常（>180 天）"]
+EXP_ALERT_TIERS = ("已过期", "30 天内", "90 天内")
+EXP_SUM = {t: dict(lots=0, skus=set(), qty=0) for t in EXP_TIERS}
+for _b in BATCH:
+    if _b["left"] <= 0:
+        continue
+    _sm = EXP_SUM[_b["tier"]]
+    _sm["lots"] += 1
+    _sm["skus"].add(_b["bar"] or norm(_b["name"]))
+    _sm["qty"] += _b["left"]
+EXP_ALERT_QTY = sum(EXP_SUM[t]["qty"] for t in EXP_ALERT_TIERS)
+EXP_ALERT_SKU = len({_b["bar"] or norm(_b["name"]) for _b in BATCH
+                     if _b["left"] > 0 and _b["tier"] in EXP_ALERT_TIERS})
+EXP_TOTAL_LEFT = sum(_b["left"] for _b in BATCH if _b["left"] > 0)
+
+# 勾稽：各条码「期末批次结存」应等于该 SKU 的期末理论结存（q0 − 动销）
+EXP_RECON = []
+for _key, _lst in _by_bar_lot.items():
+    _left = sum(b["left"] for b in _lst)
+    _theo = _theo_by_bar.get(_key)
+    if _theo is None:
+        EXP_RECON.append((_key, _left, None, "甲方挂账表无该条码"))
+    elif _left != _theo:
+        EXP_RECON.append((_key, _left, _theo, "批次结存≠账面期末结存"))
+_exp_diff_qty = sum(abs(_l - (_t or 0)) for _, _l, _t, _ in EXP_RECON)
 
 if T["act"] == 0:
     _bail("乙方库存表解析结果为 0 件，疑似表名或列位不匹配")
@@ -1130,7 +1392,7 @@ if not ADD_BACK:
 _det_sum = sum(int(d[7] or 0) for d in detail)
 if _det_sum != sum(oct_qty.values()):
     _bail(f"明细合计 {_det_sum} ≠ 按条码汇总 {sum(oct_qty.values())}（源表可能有合计行或空行）")
-_src_q0 = sum(x["qty"] for x in _jia_raw)
+_src_q0 = sum(x["qty"] for x in _jia_settle)   # 促销物料不参与结算，不计入该勾稽
 if _src_q0 != T["q0"]:
     _bail(f"挂账源表数量合计 {_src_q0} ≠ 归一化后 {T['q0']}（同品名多行合并异常）")
 
@@ -1283,6 +1545,18 @@ concl = [
     f"5. 本期库存账实相符，无差异需调整；期末结存货值与乙方库存一致。",
     f"6. 本期结算金额 {T['settle']:,.2f} 元占期初未结算货值 {OPEN_VAL:,.2f} 元的 {(T['settle'] / OPEN_VAL * 100 if OPEN_VAL else 0):.2f}%；期末未结算货值（甲方账面）{BOOK_END:,.2f} 元。本表不就合同约定的动销保障指标作判定。",
 ] + ([f"7. 贴花费用：按本期动销 {T['q10']} 件 × 各单品当期生效贴花标准计算，合计 {TH_TOTAL:,.2f} 元，明细见对账单第三节；兑付方式由双方书面确认。"] if TH_ACTIVE else [])
+if BATCH:
+    concl.append(f"{len(concl) + 1}. 批次效期：期末 {len([_b for _b in BATCH if _b['left'] > 0])} 个批次有结存，其中 {EXP_ALERT_SKU} 个 SKU、{EXP_ALERT_QTY:,} 件"
+                 f"将在 90 天内到期或已过期（含已过期），明细见附表 08。"
+                 + ("" if not FIFO_ISSUES else f"另有 {len(FIFO_ISSUES)} 个 SKU 存在后进先出迹象，见附表 08。"))
+else:
+    concl.append(f"{len(concl) + 1}. 批次效期：本期未提供批次效期数据，未生成效期预警；"
+                 f"请在挂账表补「批次号／有效期至」列后重跑（见附表 08）。")
+if PROMO:
+    concl.append(f"{len(concl) + 1}. 试用装／中小样／配赠：本期甲方出库 {sum(_p['out_qty'] for _p in PROMO.values()):,} 件，"
+                 + ("乙方已提供使用数据，差异见附表 09。"
+                    if PROMO_USE_SRC else "乙方未提供使用数据，按出库口径列示（未经乙方确认）。")
+                 + "该部分不参与货款结算。")
 for t in concl:
     mput(ws, r, 1, r, 12, t, F(9), A("left", "center", True, 1))
     ws.row_dimensions[r].height = _fit_h(t)
@@ -1301,6 +1575,21 @@ if diff_rows:
 _asks_raw += [("非结算类库存归属", f"{len(extra)} 个单品共 {EXTRA_Q:,} 件，甲方挂账表未列示", "请确认归属与结算属性"),
               ("结算期间划分", (f"{NEXT_LABEL}销售 {T['q11']} 件（{NOV_VAL:,.2f} 元）回加库存、不计入本期"
                                if ADD_BACK else "库存导出日不晚于期末，无导出日前销售需回加"), "请书面回复确认")]
+if BATCH and EXP_ALERT_QTY:
+    _asks_raw.append(("近效期库存处理",
+                      f"{EXP_ALERT_SKU} 个 SKU、{EXP_ALERT_QTY:,} 件将在 90 天内到期或已过期（附表 08）",
+                      "请优先动销或书面申请退回，处理方式与费用承担由双方确认"))
+elif not BATCH:
+    _asks_raw.append(("批次效期数据", "本期未提供批次／有效期数据，无法预警",
+                      "请在挂账表补「批次号／有效期至」列，或提供批次效期表"))
+if PROMO and not PROMO_USE_SRC:
+    _asks_raw.append(("试用装／配赠使用数据",
+                      f"甲方出库 {sum(_p['out_qty'] for _p in PROMO.values()):,} 件，乙方未提供使用数量",
+                      "请补报使用明细，或书面确认按出库计列"))
+if FIFO_ISSUES:
+    _asks_raw.append(("批次核销口径",
+                      f"{len(FIFO_ISSUES)} 个 SKU 存在后进先出迹象（较早批次仍有余额、较晚批次已扣减）",
+                      "请确认批次核销是否按先进先出执行"))
 asks = [(str(_i), _a, _b, _c) for _i, (_a, _b, _c) in enumerate(_asks_raw, 1)]
 for no, item, cont, rep in asks:
     mput(ws, r, 1, r, 1, no, F(9, True), A("center"))
@@ -1323,7 +1612,11 @@ for no, nm, use in [("01", "对账单", "正式结算单据，可直接打印盖
                     ("04", "甲方挂账明细", "甲方 ERP 未结算挂账原表（清洗），期初余额依据"),
                     ("05", "乙方销售汇总", f"{_d_end.month} 月动销按 SKU × 门店交叉汇总，销量核对依据"),
                     ("06", "乙方库存明细", f"乙方 {_d_asof:%Y%m%d} 库存原表（{inv_sheet_name} 清洗），库存核对依据"),
-                    ("07", "乙方销售流水", f"乙方当期销售流水明细 {len(detail)} 行，逐笔溯源")]:
+                    ("07", "乙方销售流水", f"乙方当期销售流水明细 {len(detail)} 行，逐笔溯源"),
+                    ("08", "效期预警", ("按批次列示剩余天数与分档，供乙方优先动销" if BATCH
+                                       else "本期未提供批次效期数据，仅出说明页")),
+                    ("09", "试用装与配赠", ("试用装／中小样／配赠出库与使用情况，供费用核算"
+                                          if PROMO else "本期挂账表无促销物料行"))]:
     mput(ws, r, 1, r, 2, f"附表 {no}", F(9, True, BLUE), A("center"), VLBLUE)
     mput(ws, r, 3, r, 4, nm, F(9, True), A("left", "center", True, 1))
     mput(ws, r, 5, r, 12, use, F(9), A("left", "center", True, 1))
@@ -1484,6 +1777,15 @@ notes = [
     ("6.", f"付款期限：请于 {PAY_CN}前将上述款项汇入甲方指定账户。按合同约定，对账单存在异议不影响无争议部分按期支付。"),
     ("7.", "本对账单所列单价为双方约定的供货结算价；开票事宜由双方按实际付款与双方约定另行确认。"),
 ]
+if PROMO:
+    notes.append((f"{len(notes) + 1}.",
+                  f"试用装／中小样／配赠本期出库 {sum(_p['out_qty'] for _p in PROMO.values()):,} 件，"
+                  f"不参与货款结算；使用情况见附表 09（乙方"
+                  f"{'已' if PROMO_USE_SRC else '未'}提供使用数据）。"))
+if BATCH and EXP_ALERT_QTY:
+    notes.append((f"{len(notes) + 1}.",
+                  f"批次效期：{EXP_ALERT_SKU} 个 SKU、{EXP_ALERT_QTY:,} 件将在 90 天内到期或已过期，"
+                  f"请乙方优先动销或申请退回；明细见附表 08。"))
 for no, t in notes:
     mput(ws, r, 1, r, 1, no, F(8.5, True, BLUE), A("right", "top", False, 0))
     mput(ws, r, 2, r, 7, t, F(8.5), A("left", "center", True, 0))
@@ -1866,6 +2168,9 @@ mput(ws, r, 1, r, 10,
      (("说明：初始数量与未结算数量逐行一致，本表以“未结算数量”作为 "
        + P_START + " 期初未结算数量；本表不对甲方系统结算状态作推断。") if _init_same else
       "说明：存在初始数量与未结算数量不一致的明细行（见备注列），本表按未结算数量作为本期期初，请核对甲方系统结算记录；")
+     + ("另有 " + str(len(_jia_promo)) + " 行试用装／中小样／配赠（"
+        + format(sum(x["qty"] for x in _jia_promo), ",") + " 件）不参与货款结算，未计入本表，见附表 09。"
+        if _jia_promo else "")
      + "金额校验列＝单价×未结算数量－未结算金额，合计为 0 表示源表内部一致。",
      F(8, False, DGREY), A("left", "center", True, 0))
 ws.row_dimensions[r].height = 34
@@ -2111,15 +2416,257 @@ ws.row_dimensions[r].height = 34
 ws.freeze_panes = "A6"
 print("07 ok")
 
+# ==================== 08 效期预警 ====================
+ws = out.create_sheet("08-效期预警")
+setup(ws, [6, 34, 11, 14, 12, 10, 9, 9, 9, 11, 14, 14], "landscape")
+ws.row_dimensions[1].height = 10
+mput(ws, 2, 1, 2, 12, "附 表 08　批次效期预警", F(15, True, NAVY), A("center"))
+ws.row_dimensions[2].height = 32
+mput(ws, 3, 1, 3, 12,
+     f"基准日：{P_END}（对账截止日）　·　数据来源：{BATCH_SRC or '未提供'}　·　"
+     f"期末结存＝期初批次数量 − 本期动销（按有效期升序 FIFO 扣减）",
+     F(8.5, False, DGREY), A("center"))
+ws.row_dimensions[3].height = 20
+ws.row_dimensions[4].height = 6
+r = 5
+
+if not BATCH:
+    sec(ws, r, 1, 12, "一、本期未提供批次效期数据"); r += 1
+    mput(ws, r, 1, r, 12,
+         BATCH_NOTE + "。请在甲方挂账表增加「批次号／有效期至」两列，或另提供批次效期表后重跑；"
+         "本表不推测效期分布，也不按品名或经验赋值。",
+         F(9), A("left", "center", True, 1), LAMBER)
+    ws.row_dimensions[r].height = 44; r += 2
+    sec(ws, r, 1, 12, "二、需要补充的材料（任一即可）"); r += 1
+    for _t in ["① 甲方挂账表增加「批次号」「有效期至」列——推荐，与挂账数据同源，无需额外文件；",
+               "② 或提供独立批次效期表：条码、品名、批次号、生产日期、有效期至、数量；",
+               "③ 若只有生产日期与保质期，脚本按「生产日期＋保质期（月）」推算到期日；",
+               "④ 三者都没有时，本表只出本说明页，并在 00 表列入待确认事项。"]:
+        mput(ws, r, 1, r, 12, _t, F(9), A("left", "center", True, 1))
+        ws.row_dimensions[r].height = 24; r += 1
+else:
+    sec(ws, r, 1, 12, "一、预警汇总（按期末结存的剩余天数分档）"); r += 1
+    hdr(ws, r, 1, ["预警档", "", "", "批次数", "SKU 数", "件数", "", "", "", "", "", ""], 26)
+    for _c1, _c2 in ((1, 3), (6, 12)):
+        ws.merge_cells(start_row=r, start_column=_c1, end_row=r, end_column=_c2)
+    r += 1
+    for _t in EXP_TIERS:
+        _sm = EXP_SUM[_t]
+        _fl = (LRED if _t == "已过期" else LAMBER if _t in ("30 天内", "90 天内")
+               else GREY if _t == "180 天内" else WHITE)
+        mput(ws, r, 1, r, 3, _t, F(9, True), A("center"), _fl)
+        for _c, _v in ((4, _sm["lots"]), (5, len(_sm["skus"])), (6, _sm["qty"])):
+            _cell = ws.cell(row=r, column=_c); num(_cell, _v); _cell.fill = fill(_fl)
+        for _c in range(7, 13):
+            _cell = ws.cell(row=r, column=_c); _cell.value = None; _cell.fill = fill(_fl)
+            _cell.border = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
+        ws.row_dimensions[r].height = 22; r += 1
+    mput(ws, r, 1, r, 12,
+         f"合计：期末结存 {len([_b for _b in BATCH if _b['left'] > 0])} 个批次 / {EXP_TOTAL_LEFT:,} 件。"
+         f"其中 90 天内到期或已过期 {EXP_ALERT_SKU} 个 SKU、{EXP_ALERT_QTY:,} 件（含 30 天内与已过期）。",
+         F(9, True, NAVY), A("left", "center", True, 1), LBLUE)
+    ws.row_dimensions[r].height = 24; r += 2
+
+    sec(ws, r, 1, 12, "二、预警明细（仅列期末有结存的批次，按剩余天数升序）"); r += 1
+    hdr(ws, r, 1, ["序号", "商品名称", "规格", "批次号", "有效期至", "剩余天数",
+                   "期初数量", "本期扣减", "期末结存", "预警档", "商品条码", "备注"], 30)
+    r += 1
+    _spec_of = {b: (v.get("spec") or "") for b, v in MS_BAR.items()}
+    _fifo_lots = {(n, l) for n, ls, _ in FIFO_ISSUES for l in ls} if FIFO_ISSUES else set()
+    _live = [_b for _b in BATCH if _b["left"] > 0]
+    for _i, _b in enumerate(sorted(_live, key=lambda z: (z["days"], z["name"])), 1):
+        _bg = WHITE if _i % 2 else GREY
+        mput(ws, r, 1, r, 1, _i, F(8.5), A("center"), _bg)
+        mput(ws, r, 2, r, 2, _b["name"], F(8.5), A("left", "center", True, 0), _bg)
+        mput(ws, r, 3, r, 3, _spec_of.get(_b["bar"], "") or "—", F(8.5), A("center"), _bg)
+        mput(ws, r, 4, r, 4, _b["lot"], F(8.5), A("center"), _bg)
+        _c = mput(ws, r, 5, r, 5, _b["exp"], F(8.5), A("center"), _bg)
+        _c.number_format = "yyyy-mm-dd"
+        _cell = ws.cell(row=r, column=6); num(_cell, _b["days"]); _cell.fill = fill(_bg)
+        if _b["days"] < 0:
+            _cell.font = F(8.5, True, RED)
+        for _c, _v in ((7, _b["qty"]), (8, _b.get("used", 0)), (9, _b["left"])):
+            _cell = ws.cell(row=r, column=_c); num(_cell, _v); _cell.fill = fill(_bg)
+        _tf = {"已过期": LRED, "30 天内": LAMBER, "90 天内": LAMBER,
+               "180 天内": GREY, "正常（>180 天）": WHITE}[_b["tier"]]
+        mput(ws, r, 10, r, 10, _b["tier"], F(8.5, True), A("center"), _tf)
+        _cell = ws.cell(row=r, column=11); _cell.value = _b["bar"]; _cell.font = F(8.5)
+        _cell.alignment = A("center"); _cell.number_format = "@"; _cell.fill = fill(_bg)
+        _note = "后进先出迹象" if (_b["name"], _b["lot"]) in _fifo_lots else "—"
+        mput(ws, r, 12, r, 12, _note, F(8, c=RED if _note != "—" else DGREY),
+             A("left", "center", True, 0), _bg)
+        ws.row_dimensions[r].height = 19; r += 1
+    r += 1
+
+    sec(ws, r, 1, 12, "三、批次结存与账面勾稽／FIFO 校验"); r += 1
+    if EXP_RECON:
+        for _bar_, _l_, _t_, _why in EXP_RECON[:20]:
+            mput(ws, r, 1, r, 12,
+                 f"⚠ 条码 {_bar_ or '（无条码）'}：期末批次结存 {_l_:,} 件，账面期末结存 "
+                 f"{'（无对应挂账行）' if _t_ is None else format(_t_, ',') + ' 件'}；{_why}",
+                 F(8.5), A("left", "center", True, 1), LAMBER)
+            ws.row_dimensions[r].height = 20; r += 1
+        mput(ws, r, 1, r, 12,
+             f"说明：共 {len(EXP_RECON)} 个条码的批次结存与账面期末结存不一致（合计差 {_exp_diff_qty:,} 件），"
+             f"多为批次数量与挂账数量口径不同或批次缺失；请核对后重跑，本表不做跨批次推测。",
+             F(8.5, False, DGREY), A("left", "center", True, 1)); ws.row_dimensions[r].height = 32; r += 1
+    else:
+        mput(ws, r, 1, r, 12,
+             f"批次结存与账面逐条码一致：期末批次结存合计 {EXP_TOTAL_LEFT:,} 件 = 账面期末理论结存。",
+             F(9), A("left", "center", True, 1), LGREEN)
+        ws.row_dimensions[r].height = 20; r += 1
+    if FIFO_ISSUES:
+        for _n, _earlier, _later in FIFO_ISSUES[:12]:
+            mput(ws, r, 1, r, 12,
+                 f"⚠ 「{_n}」较早批次（{'、'.join(_earlier[:3])}）仍有余额，但较晚批次"
+                 f"（{'、'.join(_later[:3])}）已发生扣减，与先进先出原则不符，请确认批次核销口径。",
+                 F(8.5), A("left", "center", True, 1), LAMBER)
+            ws.row_dimensions[r].height = 26; r += 1
+    else:
+        mput(ws, r, 1, r, 12, "FIFO 校验：未发现后进先出迹象（后批次被扣减前，更早批次均已清零）。",
+             F(9), A("left", "center", True, 1), LGREEN)
+        ws.row_dimensions[r].height = 20; r += 1
+    r += 1
+
+    sec(ws, r, 1, 12, "四、口径说明"); r += 1
+    for _t in [
+        "1. 数量口径：期初数量取甲方挂账表各批次的「未结算数量」；期末结存＝期初数量 − 本期动销，按有效期升序 FIFO 扣减。",
+        "2. 分档口径：按期末结存距对账截止日的剩余天数分档（已过期 / 30 天内 / 90 天内 / 180 天内 / 正常）。",
+        "3. FIFO 口径：先进先出为默认原则；若挂账表显示较晚批次已扣减、更早批次仍有余额，判为后进先出迹象并单列。",
+        "4. 本表为效期提醒，供乙方优先动销或申请退回；具体处理方式与费用承担由双方书面确认，本表不作归因。",
+    ]:
+        mput(ws, r, 1, r, 12, _t, F(8.5), A("left", "center", True, 1))
+        ws.row_dimensions[r].height = _fit_h(_t); r += 1
+ws.freeze_panes = "A6"
+print("08 ok")
+
+# ==================== 09 试用装与配赠 ====================
+ws = out.create_sheet("09-试用装与配赠")
+setup(ws, [6, 34, 11, 11, 13, 15, 12, 26], "landscape")
+ws.row_dimensions[1].height = 10
+mput(ws, 2, 1, 2, 8, "附 表 09　试用装 / 中小样 / 配赠 使用情况", F(15, True, NAVY), A("center"))
+ws.row_dimensions[2].height = 32
+mput(ws, 3, 1, 3, 8,
+     f"甲方数据：挂账表「物料属性」列（正装以外的促销物料）　·　乙方数据：{PROMO_USE_SRC or '未提供'}",
+     F(8.5, False, DGREY), A("center"))
+ws.row_dimensions[3].height = 20
+ws.row_dimensions[4].height = 6
+r = 5
+_PROMO_QTY = sum(_p["out_qty"] for _p in PROMO.values())
+_BASIS = str(CFG.get("promo_basis") or "outbound").lower()
+
+sec(ws, r, 1, 8, "一、口径说明"); r += 1
+for _t in [
+    "1. 试用装 / 中小样 / 配赠由甲方调拨出库，乙方是否入库取决于终端渠道规则，故不参与货款结算与库存恒等式。",
+    "2. 本表只列示数量，不计算金额（单价与费用口径由财务另行确认）；出库数量取甲方挂账表对应物料的「未结算数量」。",
+    ("3. 乙方已提供使用数据：" + PROMO_USE_SRC + "；差异＝出库－使用。"
+     if (PROMO and PROMO_USE_SRC) else
+     "3. 乙方本期未提供使用数据。按「已出库即计列」口径列示，标注未经乙方确认；乙方补报后可重算。"
+     if PROMO else
+     "3. 本期无促销物料出库，不涉及使用数据。"),
+    "4. 本表不作归因，差异处理与费用承担由双方书面确认。",
+]:
+    mput(ws, r, 1, r, 8, _t, F(8.5), A("left", "center", True, 1))
+    ws.row_dimensions[r].height = _fit_h(_t); r += 1
+r += 1
+
+if not PROMO:
+    sec(ws, r, 1, 8, "二、本期无促销物料出库"); r += 1
+    mput(ws, r, 1, r, 8,
+         "本期甲方挂账表中未出现「物料属性」为试用装／中小样／配赠的行。若确有调拨出库，"
+         "请在该表补「物料属性」列后重跑；本表不按品名关键词猜测物料属性。",
+         F(9), A("left", "center", True, 1), LAMBER)
+    ws.row_dimensions[r].height = 36; r += 1
+else:
+    sec(ws, r, 1, 8, "二、按物料属性汇总"); r += 1
+    hdr(ws, r, 1, ["物料属性", "", "SKU 数", "出库件数", "乙方报告使用", "差异", "", ""], 26)
+    for _c1, _c2 in ((1, 2), (6, 8)):
+        ws.merge_cells(start_row=r, start_column=_c1, end_row=r, end_column=_c2)
+    r += 1
+    for _k in ("试用装", "中小样", "配赠"):
+        _items = [x for x in PROMO.values() if x["kind"] == _k]
+        if not _items:
+            continue
+        _oq = sum(x["out_qty"] for x in _items)
+        _uses = []
+        for x in _items:
+            _u = PROMO_USE.get(x["bar"]) if x["bar"] else None
+            if _u is None:
+                _u = PROMO_USE.get(norm(x["name"]))
+            if _u is not None:
+                _uses.append(_u)
+        _have = len(_uses) == len(_items)
+        mput(ws, r, 1, r, 2, _k, F(9, True), A("center"), VLBLUE)
+        _cell = ws.cell(row=r, column=3); num(_cell, len(_items))
+        _cell = ws.cell(row=r, column=4); num(_cell, _oq)
+        _cell = ws.cell(row=r, column=5)
+        if _have:
+            num(_cell, sum(_uses))
+            _cell = ws.cell(row=r, column=6); num(_cell, _oq - sum(_uses))
+        else:
+            _cell.value = "—"; _cell.alignment = A("center"); _cell.font = F(9, c=DGREY)
+            _cell = ws.cell(row=r, column=6); _cell.value = "—"
+            _cell.alignment = A("center"); _cell.font = F(9, c=DGREY)
+        for _c in range(7, 9):
+            _cell = ws.cell(row=r, column=_c); _cell.value = None
+        ws.row_dimensions[r].height = 22; r += 1
+    mput(ws, r, 1, r, 8,
+         f"合计：{len(PROMO)} 个促销物料、出库 {_PROMO_QTY:,} 件"
+         + ("；乙方已提供使用数据，差异见上表。" if PROMO_USE_SRC else "；乙方未提供使用数据，差异不计算。"),
+         F(9, True, NAVY), A("left", "center", True, 1), LBLUE)
+    ws.row_dimensions[r].height = 24; r += 2
+
+    sec(ws, r, 1, 8, "三、逐 SKU 明细"); r += 1
+    hdr(ws, r, 1, ["序号", "商品名称", "规格", "物料属性", "出库数量", "乙方报告使用", "差异", "商品条码"], 30)
+    r += 1
+    for _i, _x in enumerate(sorted(PROMO.values(), key=lambda z: (z["kind"], z["name"])), 1):
+        _bg = WHITE if _i % 2 else GREY
+        _u = PROMO_USE.get(_x["bar"]) if _x["bar"] else None
+        if _u is None:
+            _u = PROMO_USE.get(norm(_x["name"]))
+        mput(ws, r, 1, r, 1, _i, F(8.5), A("center"), _bg)
+        mput(ws, r, 2, r, 2, _x["name"], F(8.5), A("left", "center", True, 0), _bg)
+        mput(ws, r, 3, r, 3, _spec_of.get(_x["bar"], "") or "—", F(8.5), A("center"), _bg)
+        mput(ws, r, 4, r, 4, _x["kind"], F(8.5, True), A("center"), _bg)
+        _cell = ws.cell(row=r, column=5); num(_cell, _x["out_qty"]); _cell.fill = fill(_bg)
+        _cell = ws.cell(row=r, column=6)
+        if _u is None:
+            _cell.value = "—"; _cell.alignment = A("center"); _cell.font = F(8.5, c=DGREY)
+            _cell.fill = fill(_bg)
+            _cell = ws.cell(row=r, column=7); _cell.value = "—"
+            _cell.alignment = A("center"); _cell.font = F(8.5, c=DGREY); _cell.fill = fill(_bg)
+        else:
+            num(_cell, _u); _cell.fill = fill(_bg)
+            _cell = ws.cell(row=r, column=7); num(_cell, _x["out_qty"] - _u); _cell.fill = fill(_bg)
+            if _x["out_qty"] != _u:
+                _cell.font = F(8.5, True, AMBER)
+        _cell = ws.cell(row=r, column=8); _cell.value = _x["bar"]; _cell.font = F(8.5)
+        _cell.alignment = A("center"); _cell.number_format = "@"; _cell.fill = fill(_bg)
+        ws.row_dimensions[r].height = 20; r += 1
+    r += 1
+
+    sec(ws, r, 1, 8, "四、费用核算参考与待确认"); r += 1
+    _bl = ("本表按甲方出库数量计列（未经乙方确认），供费用核算参考；最终结算金额与开票口径由双方书面确认。"
+           if not PROMO_USE_SRC and _BASIS != "none" else
+           "本表仅列示甲方出库数量，不认定乙方使用量；待乙方补报后重算。")
+    mput(ws, r, 1, r, 8, _bl, F(9), A("left", "center", True, 1), LAMBER)
+    ws.row_dimensions[r].height = _fit_h(_bl); r += 1
+ws.freeze_panes = "A6"
+print("09 ok")
+
 # ==================== 保存 ====================
 for sn in ["00-对账说明", "01-对账单", "02-库存差异表"]:
     out[sn].sheet_properties.tabColor = NAVY
 out["02-库存差异表"].sheet_properties.tabColor = RED
-for sn in ["03-源数据对照", "04-甲方挂账明细", "05-乙方销售汇总", "06-乙方库存明细", "07-乙方销售流水"]:
+for sn in ["03-源数据对照", "04-甲方挂账明细", "05-乙方销售汇总", "06-乙方库存明细",
+           "07-乙方销售流水", "08-效期预警", "09-试用装与配赠"]:
     out[sn].sheet_properties.tabColor = "A6A6A6"
+out["08-效期预警"].sheet_properties.tabColor = AMBER
+out["09-试用装与配赠"].sheet_properties.tabColor = BLUE
 TITLES = {"01-对账单": "12:12", "02-库存差异表": "7:7", "03-源数据对照": "5:5",
           "04-甲方挂账明细": "5:5", "05-乙方销售汇总": "6:6",
-          "06-乙方库存明细": "5:5", "07-乙方销售流水": "5:5"}
+          "06-乙方库存明细": "5:5", "07-乙方销售流水": "5:5",
+          "08-效期预警": "5:5", "09-试用装与配赠": "5:5"}
 for sn in out.sheetnames:
     w = out[sn]
     w.print_area = f"A1:{get_column_letter(w.max_column)}{w.max_row}"

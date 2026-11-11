@@ -115,6 +115,31 @@ SKUS = [
         "sales_name": "示例精华蜜15ml", "inv_name": "示例精华蜜15ml",
     },
 ]
+# 批次夹具：每行 (批次号, 有效期至, 未结算数量, 初始数量)。同一 SKU 合计必须等于期初数量，
+# 否则会改变库存差异。示例面膜E 的第二批已发生扣减、而第一批仍有余额，用于演示 FIFO 校验。
+LOTS = {
+    "690000000001": [("A1-202612", "2026-12-15", 120, 120),
+                     ("A2-202706", "2027-06-30", 180, 180)],
+    "690000000002": [("B1-202611", "2026-11-20", 200, 200)],
+    "690000000005": [("C1-202610", "2026-10-20", 40, 40),
+                     ("C2-202703", "2027-03-31", 200, 200)],
+    "690000000012": [("D1-202701", "2027-01-31", 300, 300),
+                     ("D2-202709", "2027-09-30", 200, 260)],
+    "690000000010": [("E1-202705", "2027-05-31", 120, 120)],
+    "690000000020": [("F1-202612", "2026-12-31", 0, 0)],   # 零库存新品：批次数量为 0
+}
+
+# 促销物料：只在甲方挂账表出现（乙方不一定入库），不参与货款结算
+PROMO = [
+    ("示例面膜A 试用装（单片）", "690000000101", "试用装", 600, "SY-A1", "2027-03-31"),
+    ("示例精华蜜 中小样 5ml", "690000000102", "中小样", 400, "SY-B1", "2026-12-15"),
+    ("示例面膜B 配赠装（2 片）", "690000000103", "配赠", 150, "SY-C1", "2027-01-31"),
+]
+# 乙方使用数量（可选文件才生成）：用于演示「乙方已提供使用数据」分支
+PROMO_USE = [("示例面膜A 试用装（单片）", "690000000101", 500, "示例门店一店", "2026-10-20"),
+             ("示例精华蜜 中小样 5ml", "690000000102", 300, "示例门店二店", "2026-10-25"),
+             ("示例面膜B 配赠装（2 片）", "690000000103", 150, "示例门店一店", "2026-10-28")]
+
 NONSETTLE = {
     "bar": "690000000016", "name": "示例面膜C（单片）", "alias": "示货示例面膜C 单片",
     "spec": "单片", "unit": "片", "attr": "非结算类",
@@ -266,23 +291,68 @@ def build_bip(path):
     ws.title = "挂账"
     ws["A1"] = "甲方 ERP 系统未结算挂账（演示数据，%s 导出）" % ASOF
     ws["A1"].font = Font(name="微软雅黑", size=11, bold=True)
-    headers = ["商品名称", "单价", "未结算金额", "未结算数量", "初始数量"]
-    widths = [40, 10, 14, 12, 12]
+    headers = ["商品名称", "单价", "未结算金额", "未结算数量", "初始数量",
+               "批次号", "有效期至", "物料属性"]
+    widths = [40, 10, 14, 12, 12, 14, 14, 12]
     for i, h in enumerate(headers, 1):
         cell = ws.cell(row=2, column=i, value=h)
         cell.font = Font(name="微软雅黑", size=10, bold=True, color="FFFFFF")
         cell.fill = PatternFill("solid", fgColor="1F3864")
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         ws.column_dimensions[get_column_letter(i)].width = widths[i - 1]
-    for r, s in enumerate(SKUS, 3):
-        q0 = QTY[s["bar"]]["q0"]
+    r = 3
+    for s in SKUS:
         price = s["supply_price"]
-        ws.cell(row=r, column=1, value=s["name"]).font = Font(name="微软雅黑", size=10)
-        ws.cell(row=r, column=2, value=price).number_format = "#,##0.00"
-        ws.cell(row=r, column=3, value=round(price * q0, 2)).number_format = "#,##0.00"
-        ws.cell(row=r, column=4, value=q0)
-        ws.cell(row=r, column=5, value=q0)
+        lots = LOTS[s["bar"]]
+        _expect(sum(x[2] for x in lots) == QTY[s["bar"]]["q0"],
+                "%s 批次数量合计 %s != 期初 %s" % (s["bar"], sum(x[2] for x in lots), QTY[s["bar"]]["q0"]))
+        for lot, exp, qty, init in lots:
+            ws.cell(row=r, column=1, value=s["name"]).font = Font(name="微软雅黑", size=10)
+            ws.cell(row=r, column=2, value=price).number_format = "#,##0.00"
+            ws.cell(row=r, column=3, value=round(price * qty, 2)).number_format = "#,##0.00"
+            ws.cell(row=r, column=4, value=qty)
+            ws.cell(row=r, column=5, value=init)
+            ws.cell(row=r, column=6, value=lot)
+            ws.cell(row=r, column=7, value=exp)
+            ws.cell(row=r, column=8, value="正装")
+            r += 1
+    for name, bar, kind, qty, lot, exp in PROMO:
+        ws.cell(row=r, column=1, value=name).font = Font(name="微软雅黑", size=10)
+        ws.cell(row=r, column=2, value=0).number_format = "#,##0.00"
+        ws.cell(row=r, column=3, value=0).number_format = "#,##0.00"
+        ws.cell(row=r, column=4, value=qty)
+        ws.cell(row=r, column=5, value=qty)
+        ws.cell(row=r, column=6, value=lot)
+        ws.cell(row=r, column=7, value=exp)
+        ws.cell(row=r, column=8, value=kind)
+        r += 1
     ws.sheet_view.showGridLines = False
+    wb.save(path)
+    return path
+
+
+def build_promo_use(path):
+    """乙方试用装/中小样/配赠使用明细（可选源，演示「已提供」分支）。"""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "使用明细"
+    headers = ["商品名称", "商品条码", "使用数量", "使用门店", "使用日期"]
+    widths = [34, 16, 12, 16, 14]
+    for i, h in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=i, value=h)
+        cell.font = Font(name="微软雅黑", size=10, bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="1F3864")
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        ws.column_dimensions[get_column_letter(i)].width = widths[i - 1]
+    for r, (name, bar, qty, store, day) in enumerate(PROMO_USE, 2):
+        ws.cell(row=r, column=1, value=name).font = Font(name="微软雅黑", size=10)
+        cell = ws.cell(row=r, column=2, value=bar)
+        cell.number_format = "@"
+        ws.cell(row=r, column=3, value=qty)
+        ws.cell(row=r, column=4, value=store)
+        ws.cell(row=r, column=5, value=day)
+    ws.sheet_view.showGridLines = False
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     wb.save(path)
     return path
 
@@ -386,8 +456,12 @@ def build_inventory(path):
     return path
 
 
-def build(outdir):
-    """在 outdir 下生成完整演示数据，返回客户根目录绝对路径。"""
+def build(outdir, with_promo_use=False):
+    """在 outdir 下生成完整演示数据，返回 (客户根目录, 文件路径表)。
+
+    with_promo_use=True 时额外生成乙方使用明细，用于演示「乙方已提供使用数据」分支；
+    默认不生成，走「乙方未提供」分支。
+    """
     _check_fixture()
     root = os.path.join(os.path.abspath(outdir), "铺货代销客户", "示例经销商有限公司")
     month = os.path.join(root, PERIOD)
@@ -398,6 +472,8 @@ def build(outdir):
         "sales": build_sales(os.path.join(month, "乙方-202610销售数据.xlsx")),
         "inventory": build_inventory(os.path.join(month, "乙方-20261102库存+当月销售.xlsx")),
     }
+    if with_promo_use:
+        paths["promo_use"] = build_promo_use(os.path.join(month, "乙方-202610试用装使用.xlsx"))
     return root, paths
 
 
