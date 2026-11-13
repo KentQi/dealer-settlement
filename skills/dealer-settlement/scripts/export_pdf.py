@@ -122,8 +122,27 @@ def _wrap(draw, text, font, max_w):
     return lines
 
 
+def _warn_section_merges(ws):
+    """章节标题行若未合并，快照右侧会出现一排竖线；提示而不是静默。"""
+    import re as _re
+    bad = []
+    for r in range(1, ws.max_row + 1):
+        v = ws.cell(r, 1).value
+        if not isinstance(v, str):
+            continue
+        t = v.strip()
+        if not (_re.match(r"^[一二三四五六七八九十]+、", t) or t.startswith("附 表")):
+            continue
+        if not [m for m in ws.merged_cells.ranges if m.min_row == r and m.min_col == 1]:
+            bad.append("A%d" % r)
+    if bad:
+        sys.stderr.write("[提示] %s 的章节标题行未合并（%s），快照会出现竖线；"
+                         "增删行后请同步移动合并区。\n" % (ws.title, "、".join(bad)))
+
+
 def render_sheet(ws, font_path, scale=2.0):
     """把工作表活动区域绘成 PIL 图片（保留合并/底色/边框/字体/对齐）。"""
+    _warn_section_merges(ws)
     r0, c0, r1, c1 = _used_range(ws)
     col_w, row_h = {}, {}
     for c in range(c0, c1 + 1):
