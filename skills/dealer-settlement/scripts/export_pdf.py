@@ -81,19 +81,25 @@ def _width(text):
 
 
 def _col_widths(ws, avail):
-    caps = []
+    """数字列收窄、文本列放宽，避免宽表把说明文字挤成竖排。"""
+    caps, numeric = [], []
     for c in range(1, ws.max_column + 1):
-        longest = 0
+        longest, vals, nums = 0, 0, 0
         for r in range(1, min(ws.max_row, 80) + 1):
             cell = ws.cell(row=r, column=c)
             if cell.value is None:
                 continue
-            longest = max(longest, min(_width(_fmt(cell.value, cell)), 26))
+            vals += 1
+            if isinstance(cell.value, (int, float, datetime.date, datetime.datetime)):
+                nums += 1
+            longest = max(longest, min(_width(_fmt(cell.value, cell)), 30))
         caps.append(max(4.0, float(longest)))
-    total = sum(caps) or 1
-    raw = [avail * x / total for x in caps]
-    lo, hi = 26.0, 150.0
-    out = [min(hi, max(lo, x)) for x in raw]
+        numeric.append(vals > 0 and nums / vals > 0.6)
+    weights = [cap * (0.8 if is_num else 1.6) for cap, is_num in zip(caps, numeric)]
+    total = sum(weights) or 1
+    raw = [avail * w / total for w in weights]
+    out = [min(170.0, max((20.0 if n else 44.0), x))
+           for x, n in zip(raw, numeric)]
     scale = avail / sum(out)
     return [x * scale for x in out]
 
@@ -163,13 +169,14 @@ def export(book, out, sheets, font_path="", period_cn=""):
         canvas.setFillColor(GREY)
         canvas.drawString(margin, page_h - margin + 4,
                           ("%s 铺货代销对账 · 签章件" % period_cn) if period_cn else "铺货代销对账 · 签章件")
-        canvas.drawRightString(page_w - margin, 8 * mm, "第 %d 页" % doc.page)
+        canvas.drawRightString(page_w - margin, 8 * mm,
+                               "第 %d 页" % canvas.getPageNumber())
         canvas.restoreState()
 
     doc = BaseDocTemplate(out, pagesize=landscape(A4),
-                          leftMargin=margin, rightMargin=margin,
-                          topMargin=margin, bottomMargin=margin,
-                          title="铺货代销对账签章件", author="")
+               leftMargin=margin, rightMargin=margin,
+               topMargin=margin, bottomMargin=margin,
+               title="铺货代销对账签章件", author="")
     frame = Frame(margin, margin, avail, page_h - 2 * margin, id="body")
     doc.addPageTemplates([PageTemplate(id="main", frames=[frame], onPage=_decorate)])
 
