@@ -418,6 +418,8 @@ Windows / PowerShell 见第 0 节；`--out` 属于 `load_master.py`，`recon_eng
 12. **文档属性被 openpyxl 回填**：`creator` / `lastModifiedBy` 需在最后一次保存后用 zip 级补丁清除，`check_public_copy.py` 会断言。
 13. **增删行必须同步移动合并区**：`insert_rows` / `delete_rows` 不会搬合并区。漏搬会让章节标题行变成一排等宽格子，Excel 里看似正常，快照 PDF 会出现竖线（本轮补回 20 处）。生成后可用 `export_pdf` 的 stderr 提示自查。
 
+14. **贴花标准为 0 不等于没有贴花**：0 可能是源表明确为 0（如颈膜、优效面膜），也可能是旧版本、漏配或录入错误。本期实例：某商品主档 10 月录 0、11-02 版调到 5，对账单按 10 月生效版本算出 0，经核对后更正为 5。**遇到 0 先看生效区间，再对一遍源表最新版本**，不要直接当作「无贴花」。
+
 ## 9. 复核模式
 
 复核分两种，共用 [references/复核协议.md](references/复核协议.md) 的 R1–R10 清单与报告 schema：
