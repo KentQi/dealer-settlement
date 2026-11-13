@@ -411,8 +411,8 @@ Windows / PowerShell 见第 0 节；`--out` 属于 `load_master.py`，`recon_eng
 9. **AI 自行推定业务口径**：把「效期表数量」当结存、把内部出数规则印上纸面、按 30/90/180 天分档——本轮全部发生过。统一由阶段 G 问卡阻断。
 10. **表号反复交换、交叉引用错配**：删了 sheet 却留着 00 表引用。由 `sheet_map` + `verify_refs` 事前阻断。
 11. **一次性脚本注释当口径记录**：下期读不到。口径必须落 `_口径确认.json` 并归档 `_确认记录/`。
-13. **增删行必须同步移动合并区**：`insert_rows` / `delete_rows` 不会搬合并区。漏搬会让章节标题行变成一排等宽格子，Excel 里看似正常，快照 PDF 会出现竖线（本轮补回 20 处）。生成后可用 `export_pdf` 的 stderr 提示自查。
 12. **文档属性被 openpyxl 回填**：`creator` / `lastModifiedBy` 需在最后一次保存后用 zip 级补丁清除，`check_public_copy.py` 会断言。
+13. **增删行必须同步移动合并区**：`insert_rows` / `delete_rows` 不会搬合并区。漏搬会让章节标题行变成一排等宽格子，Excel 里看似正常，快照 PDF 会出现竖线（本轮补回 20 处）。生成后可用 `export_pdf` 的 stderr 提示自查。
 
 ## 9. 复核模式
 
