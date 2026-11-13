@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires Python 3.9+ with openpyxl, xlrd (>=2.0, .xls read), pdfplumber and read/write access to the workbook folder. Optional — Pillow + reportlab for the sheet-snapshot PDF (without them only PDF is skipped); Excel/WPS to open .xlsx; OCR for scanned contracts. L6 review runs in the harness LLM (scripts never call a model). Commands in bash with PowerShell equivalents.
 metadata:
   author: KentQi
-  version: "1.8.4"
+  version: "1.8.5"
 ---
 
 # 铺货代销全流程：建档 → 确认 → 对账 → 校验 → 复核
@@ -418,7 +418,7 @@ Windows / PowerShell 见第 0 节；`--out` 属于 `load_master.py`，`recon_eng
 12. **文档属性被 openpyxl 回填**：`creator` / `lastModifiedBy` 需在最后一次保存后用 zip 级补丁清除，`check_public_copy.py` 会断言。
 13. **增删行必须同步移动合并区**：`insert_rows` / `delete_rows` 不会搬合并区。漏搬会让章节标题行变成一排等宽格子，Excel 里看似正常，快照 PDF 会出现竖线（本轮补回 20 处）。生成后可用 `export_pdf` 的 stderr 提示自查。
 
-14. **贴花标准为 0 不等于没有贴花**：0 可能是源表明确为 0（如颈膜、优效面膜），也可能是旧版本、漏配或录入错误。本期实例：某商品主档 10 月录 0、11-02 版调到 5，对账单按 10 月生效版本算出 0，经核对后更正为 5。**遇到 0 先看生效区间，再对一遍源表最新版本**，不要直接当作「无贴花」。
+14. **贴花标准为 0 不等于没有贴花**：0 既可能是源表明确标注为 0，也可能是旧版本、漏配或录入错误。贴花表按「条码 + 生效起止」维护，当期取到 0 时往往只是命中了一段旧区间。**遇到 0 先看生效区间，再对照源表最新版本核一遍**，确认后才可判为「无贴花」；若属漏配，应先修主档再重算对账单与签章件。
 
 ## 9. 复核模式
 
