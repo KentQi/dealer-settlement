@@ -24,10 +24,14 @@ RESULTS = ("通过", "不通过", "不适用")
 # 交付门禁：只有这两种结论允许进入交付
 DELIVERABLE_VERDICTS = ("通过", "有条件通过")
 
-# ---- 复核记录（工作簿第 9 张表）----
-REVIEW_SHEET = "10-复核记录"
-# 兼容旧工作簿：1.6.0 之前复核记录是第 9 张（08-复核记录）
-LEGACY_REVIEW_SHEETS = ("08-复核记录",)
+# ---- 复核记录：表号随模块开关变化（9 表 / 10 表 / 11 表都可能）----
+REVIEW_SHEET = "10-复核记录"          # 完整 10 表时的规范名，也是历史默认
+LEGACY_REVIEW_SHEETS = ("08-复核记录", "09-复核记录")
+
+
+def review_sheet_name(n_sheets):
+    """按实际工作表数量命名（10 张表 -> 10-复核记录），不写死编号。"""
+    return "%02d-复核记录" % n_sheets
 REVIEW_DIR = "_复核记录"
 LOCK_NAME = "复核锁.json"
 

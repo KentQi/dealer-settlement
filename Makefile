@@ -7,7 +7,7 @@ PYTHON ?= python3
 help:
 	@printf '%s\n' \
 	  'make check    校验插件/技能清单、语法编译' \
-	  'make demo     四套端到端演示：对账 / L6 复核 / 结构映射 / 确认单定位' \
+	  'make demo     五套端到端演示：对账 / L6 复核 / 结构映射 / 确认单定位 / v1.7 门禁与签章 PDF' \
 	  'make package  构建 dist/ 下两个包：技能安装包 + 完整源码包（UTF-8 文件名）' \
 	  'make clean    清理构建产物与 __pycache__'
 
@@ -20,6 +20,7 @@ demo:
 	$(PYTHON) examples/review_demo.py
 	$(PYTHON) examples/schema_demo.py
 	$(PYTHON) examples/confirm_demo.py
+	$(PYTHON) examples/v17_demo.py
 
 package: check
 	$(PYTHON) tools/package_zip.py

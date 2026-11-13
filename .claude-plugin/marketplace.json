@@ -9,7 +9,7 @@
     {
       "name": "dealer-settlement",
       "source": "./",
-      "description": "铺货代销全流程：合同建档、月度对账 8 表工作簿、贴花计算、五层校验",
+      "description": "铺货代销全流程：合同建档、月度对账 对账工作簿工作簿、贴花计算、五层校验",
       "license": "MIT",
       "keywords": [
         "dealer-settlement",

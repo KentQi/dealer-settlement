@@ -456,6 +456,48 @@ def build_inventory(path):
     return path
 
 
+def build_koujing(root, period="202610", asof="2026-11-02"):
+    """演示用的口径确认记录；真实使用必须由阶段 G 问卡逐项确认后生成。"""
+    import datetime
+    import json
+    ledger = []
+    for name, bar, kind, qty, lot, exp in PROMO:
+        ledger.append(dict(name=name, kind=kind, link=name, sales=0,
+                           opening=0, shipped=qty, used=1 if kind == "试用装" else 0))
+    kj = {
+        "schema": "dealer-settlement/koujing@1",
+        "customer": "示例经销商有限公司", "period": period, "asof": asof,
+        "scene": "每月出账", "confirmed_by": "演示确认人",
+        "confirmed_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "decisions": {
+            "settlement_basis": {"source": "甲方挂账表", "field": "未结算数量",
+                                 "excluded": ["效期参考表的结存数量"]},
+            "category_source": {"source": "商品分类", "正装": 0, "试用装": 600, "中小样": 550},
+            "promo": {"settle": False, "separate_sheet": True, "confirm_by_party_b": True},
+            "rolling": {"opening_source": "上期甲方期末", "carry_forward": True,
+                        "first_period_opening": 0},
+            "usage": {"values": {"试用装": 1, "中小样": 0, "配赠": 0},
+                      "source": "甲方口径", "private": True, "ledger": ledger},
+            "expiry": {"enabled": False, "unit": "month", "tiers": [32, 28, 24],
+                       "base": "asof", "fifo": "display_only",
+                       "sample_qty_basis": "台账期末", "next_period": True},
+            "barcode_bridge": {"required": True},
+            "sheet_map": {"08": "试用装与中小样", "09": "效期预警"},
+            "print": {"red_sheets": ["00", "01", "02", "08"],
+                      "pdf_sheets": ["00", "01", "02", "08"]},
+            "delta": {"mode": "full", "frozen_sheets": [],
+                      "note_only_sheets": [], "rebuild_sheets": []},
+        },
+        "internal_only": ["演示用出数规则", "演示用内部费用目的"],
+        "disclosure_whitelist": ["本表所列商品不参与货款结算"],
+        "notes": [],
+    }
+    path = os.path.join(root, "_口径确认.json")
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(kj, fh, ensure_ascii=False, indent=2)
+    return path
+
+
 def build(outdir, with_promo_use=False):
     """在 outdir 下生成完整演示数据，返回 (客户根目录, 文件路径表)。
 
@@ -474,6 +516,7 @@ def build(outdir, with_promo_use=False):
     }
     if with_promo_use:
         paths["promo_use"] = build_promo_use(os.path.join(month, "乙方-202610试用装使用.xlsx"))
+    build_koujing(root)
     return root, paths
 
 

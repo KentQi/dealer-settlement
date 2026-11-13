@@ -35,7 +35,7 @@ from openpyxl.utils import get_column_letter
 try:  # 脚本目录即 sys.path[0]；作为模块被导入时兜底
     from review_common import (
         DELIVERABLE_VERDICTS, LEGACY_REVIEW_SHEETS, LEVELS, LOCK_NAME,
-        REQUIRED_IDS, REQUIRED_ITEMS, RESULTS, REVIEW_DIR, REVIEW_SHEET,
+        REQUIRED_IDS, REQUIRED_ITEMS, RESULTS, REVIEW_DIR, REVIEW_SHEET, review_sheet_name,
         SCHEMA_PACKET, SCHEMA_REPORT, VERDICTS,
         iso_now, load_json, parse_iso8601, sha256_file,
     )
@@ -43,7 +43,7 @@ except ImportError:  # pragma: no cover - 仅异常运行方式触发
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from review_common import (
         DELIVERABLE_VERDICTS, LEGACY_REVIEW_SHEETS, LEVELS, LOCK_NAME,
-        REQUIRED_IDS, REQUIRED_ITEMS, RESULTS, REVIEW_DIR, REVIEW_SHEET,
+        REQUIRED_IDS, REQUIRED_ITEMS, RESULTS, REVIEW_DIR, REVIEW_SHEET, review_sheet_name,
         SCHEMA_PACKET, SCHEMA_REPORT, VERDICTS,
         iso_now, load_json, parse_iso8601, sha256_file,
     )
@@ -177,11 +177,14 @@ def _section(ws, row, text):
 
 
 def write_review_sheet(wb, report, pre_sha, archive_name, packet_name, workbook_name):
-    """写入/更新「10-复核记录」工作表（只动这一张表，其余表原样）。"""
-    for _name in (REVIEW_SHEET,) + LEGACY_REVIEW_SHEETS:
+    """写入/更新复核记录工作表（只动这一张表，其余表原样）。"""
+    _all_names = ((REVIEW_SHEET,) + LEGACY_REVIEW_SHEETS
+                  + tuple(n for n in wb.sheetnames if n.endswith("-复核记录")))
+    for _name in set(_all_names):
         if _name in wb.sheetnames:
             del wb[_name]
-    ws = wb.create_sheet(REVIEW_SHEET)
+    _sheet = review_sheet_name(len(wb.sheetnames))
+    ws = wb.create_sheet(_sheet)
     for index, width in enumerate(SHEET_WIDTHS, 1):
         ws.column_dimensions[get_column_letter(index)].width = width
     ws.sheet_view.showGridLines = False
@@ -192,7 +195,7 @@ def write_review_sheet(wb, report, pre_sha, archive_name, packet_name, workbook_
     summary = report.get("summary") if isinstance(report.get("summary"), str) else ""
 
     row = 1
-    _put(ws, row, 1, len(SHEET_WIDTHS), "08 复核记录（L6 LLM 语义复核）",
+    _put(ws, row, 1, len(SHEET_WIDTHS), "%s 复核记录（L6 LLM 语义复核）" % _sheet[:2],
          bold=True, size=14, color="FFFFFF", fill=NAVY, horizontal="center")
     ws.row_dimensions[row].height = 30
     row += 1
@@ -296,6 +299,9 @@ def _review_sheet_of(wb):
     """复核记录工作表名：优先新名，兼容旧工作簿的 08-复核记录。"""
     for name in (REVIEW_SHEET,) + LEGACY_REVIEW_SHEETS:
         if name in wb.sheetnames:
+            return name
+    for name in wb.sheetnames:
+        if name.endswith("-复核记录"):
             return name
     return ""
 

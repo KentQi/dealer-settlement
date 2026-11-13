@@ -3,3 +3,4 @@
 openpyxl>=3.1,<4          # .xlsx 读写与工作簿生成
 xlrd>=2.0,<3              # 读取旧版 .xls 导出（openpyxl 不支持 .xls）
 pdfplumber>=0.11,<1       # 从 PDF 合同抽取文本（.docx/.txt 不需要）
+reportlab>=4,<6          # 导出签章 PDF（纯本地，自动发现系统中文字体）

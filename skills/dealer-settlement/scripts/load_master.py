@@ -25,6 +25,9 @@ import sys
 
 import openpyxl
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import koujing
+
 CFG_SCHEMA_HINT = "RECON_CFG"
 
 
@@ -96,6 +99,18 @@ def main():
     ap.add_argument("--base", help="月份目录，默认主档同级的 {period} 或主档所在目录")
     ap.add_argument("--out", help="输出文件全路径，默认 {月份目录}/{period}铺货代销对账.xlsx")
     ap.add_argument("--strict", action="store_true", help="主档关键信息不全时直接退出")
+    ap.add_argument("--scene", default="每月出账", choices=list(koujing.SCENES),
+                    help="本次作业场景，决定口径确认的必问项")
+    ap.add_argument("--koujing", default="", help="口径确认记录路径，默认客户根目录")
+    ap.add_argument("--allow-legacy", action="store_true",
+                    help="显式放行历史期间；不读口径记录，stderr 强警告，不改变默认阻断")
+    ap.add_argument("--mode", default="full", choices=("full", "incremental"),
+                    help="full 全量出账；incremental 在已有工作簿上重做附表")
+    ap.add_argument("--in-workbook", default="", help="incremental 模式的已有工作簿")
+    ap.add_argument("--overwrite", action="store_true",
+                    help="v1.7 全链路出账用：允许覆盖同名工作簿（apply_v17 会先备份）")
+    ap.add_argument("--pdf", action="store_true", help="出账后导出签章 PDF")
+    ap.add_argument("--pdf-sheets", default="00,01,02,08", help="PDF 包含的表号")
     a = ap.parse_args()
 
     # ---- 参数校验放在读文件之前，错误一律走 stderr、stdout 0 字节 ----
@@ -222,6 +237,21 @@ def main():
                   f"当前 {mapping.get('schema')!r}；要求 'dealer-settlement/data-mapping@1'。\n"
                   f"请用 apply_mapping.py 重新生成/确认映射后重试。")
 
+    # ---- 阶段 G：业务口径确认门禁（1.7.0 起默认强制）----
+    koujing_path = a.koujing or os.path.join(root, koujing.FILENAME)
+    if a.allow_legacy:
+        kj = koujing.blank(a.scene, a.period, ad.isoformat())
+        kj["confirmed_by"] = "legacy"
+        kj["config_sha256"] = koujing.digest(kj)
+        print("[警告] --allow-legacy 已放行，未读取口径确认记录；"
+              "本次结果仅用于历史期间只读复核，不得作为正式交付件。", file=sys.stderr)
+    else:
+        kj = koujing.load(koujing_path, a.scene)
+        print(f"[口径确认] 场景 {kj['scene']} · 确认人 {kj['confirmed_by']} · "
+              f"哈希 {kj['config_sha256'][:12]}", file=sys.stderr)
+    if a.mode == "incremental" and not a.in_workbook:
+        _fail("[参数错误] --mode incremental 需要 --in-workbook 指定已有工作簿。")
+
     cfg = {
         "base_dir": base,
         "master_path": os.path.abspath(a.master),
@@ -256,12 +286,26 @@ def main():
             "promo_use": pick([("使用", None), ("领用", None)], ""),
             "barcode_map": pick([("条码对照", None), ("编码对照", None),
                                  ("物料编码", None), ("条码映射", None)], ""),
+            # 1.7.0 新增：商品分类（发货量/物料属性）与效期参考（只给批次与到期日）
+            "item_class": pick([("商品分类", None), ("分类", None)], ""),
+            "expiry_ref": pick([("效期", None), ("批次", None), ("生产日期", None)], ""),
         },
     }
     if mapping is not None:
         cfg["mapping"] = mapping
     if a.out:
         cfg["out_file"] = os.path.abspath(a.out)
+    cfg["koujing"] = kj
+    if a.overwrite:
+        cfg["overwrite"] = True   # v1.7 由 apply_v17 先备份再覆盖
+    cfg["v17"] = {
+        "enabled": True,
+        "mode": a.mode,
+        "input_workbook": os.path.abspath(a.in_workbook) if a.in_workbook else "",
+        "pdf": bool(a.pdf),
+        "pdf_sheets": [x.strip() for x in a.pdf_sheets.split(",") if x.strip()],
+        "koujing_path": os.path.abspath(koujing_path),
+    }
     print(json.dumps(cfg, ensure_ascii=False))
 
 
