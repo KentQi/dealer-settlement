@@ -2,7 +2,7 @@
 name: dealer-settlement
 description: 铺货代销（代销 / 铺货）对账作业包：① 从经销合同识别关键字段、生成 HTML 确认页、经人工逐项确认后写入客户主档；② 阶段 G 口径确认门禁——任何业务口径未逐项确认即阻断出账，答案落 _口径确认.json 并绑定复核锁；③ 用主档 + 当期导出生成对账工作簿（00–07 结算核心 + 08 试用装与中小样四栏滚动台账 + 09 商品批次效期提示，09 由开关控制、能力完整保留）；④ 五层确定性校验 L1–L5 + L6 LLM 语义复核门禁；⑤ 结构漂移识别与映射确认；⑥ 确认单零文件操作；⑦ 增量补表（01–07 零差异）与 00/01/02/08 合成签章 PDF。当用户要求「识别合同 / 建客户档」「某月对账 / 算应结算金额 / 核对库存 / 出对账单 / 算贴花」「复核本次出账 / 验收」「怎么操作 / 需要准备什么材料」，或提到「字段名 / 表名 / 列顺序不一致」「确认页提交 / 自动定位确认单」「批次效期 / 临期预警 / 效期提醒」「试用装 / 中小样 / 配赠 / 赠品使用量」「给已有工作簿补附表 / 导出 PDF 给客户盖章」「这期不做效期 / 下期恢复」时使用。判据与校验通用，但单据版式与披露文案按「品牌方 × 经销商（示例）」场景打磨，换客户首次出账需复核版式。
 license: MIT
-compatibility: Requires Python 3.9+ with openpyxl, xlrd (>=2.0, .xls read), pdfplumber and reportlab (PDF export), plus read/write access to the customer workbook folder. Optional — Excel/WPS/LibreOffice to open generated .xlsx; OCR tooling only for scanned contracts. L6 review runs in the harness LLM (scripts never call a model) and needs workbook read + file write; without write access, output the report JSON for manual archiving. Commands are shown in bash with PowerShell equivalents for Windows.
+compatibility: Requires Python 3.9+ with openpyxl, xlrd (>=2.0, .xls read) and pdfplumber. Optional — reportlab for PDF export; without it, only PDF generation is skipped, plus read/write access to the customer workbook folder. Optional — Excel/WPS/LibreOffice to open generated .xlsx; OCR tooling only for scanned contracts. L6 review runs in the harness LLM (scripts never call a model) and needs workbook read + file write; without write access, output the report JSON for manual archiving. Commands are shown in bash with PowerShell equivalents for Windows.
 metadata:
   author: KentQi
   version: "1.7.0"

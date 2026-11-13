@@ -182,7 +182,7 @@ def main():
             from export_pdf import register_font
             register_font()
             has_font = True
-        except SystemExit:
+        except Exception:
             has_font = False
             print("  · 未找到中文字体，跳过 PDF 断言（可用 --font 指定）")
         if not has_font:

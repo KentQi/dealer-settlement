@@ -27,7 +27,6 @@ from openpyxl.worksheet.properties import PageSetupProperties
 _SK = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _SK)
 from check_public_copy import clean_properties, scan  # noqa: E402
-import export_pdf  # noqa: E402
 import koujing  # noqa: E402
 
 NAVY, BLUE, WHITE = "1F3864", "2E5C9A", "FFFFFF"
@@ -495,6 +494,13 @@ def main():
                          ensure_ascii=False))
 
     if v17.get("pdf"):
+        try:
+            import export_pdf
+        except Exception as exc:
+            print(json.dumps({"pdf_skipped": True,
+                              "reason": "reportlab 不可用：%s" % exc},
+                             ensure_ascii=False))
+            return 0
         sheets = v17.get("pdf_sheets") or ["00", "01", "02", "08"]
         tag = cfg["period"].get("period") or str(cfg["period"].get("out_name", ""))[:6]
         pdf = os.path.join(os.path.dirname(out), "%s对账-签章件.pdf" % tag)
