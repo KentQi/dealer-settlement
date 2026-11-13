@@ -36,10 +36,12 @@ def clean_properties(path):
             data = zin.read(item.filename)
             if item.filename == "docProps/core.xml":
                 s = data.decode("utf-8")
-                s = re.sub(r"<dc:creator>.*?</dc:creator>", "<dc:creator></dc:creator>", s)
-                s = re.sub(r"<cp:lastModifiedBy>.*?</cp:lastModifiedBy>",
-                           "<cp:lastModifiedBy></cp:lastModifiedBy>", s)
-                s = re.sub(r"<dcterms:(created|modified)[^>]*>.*?</dcterms:\1>", "", s)
+                # 开标签可能自带命名空间声明（如 <dc:creator xmlns:dc="…">，WPS/Excel 另存后常见），
+                # 只清内容、保留属性——连同属性一起替换会丢掉 dc 前缀声明，core.xml 直接不合法
+                s = re.sub(r"(<dc:creator[^>]*>).*?(</dc:creator>)", r"\1\2", s, flags=re.S)
+                s = re.sub(r"(<cp:lastModifiedBy[^>]*>).*?(</cp:lastModifiedBy>)",
+                           r"\1\2", s, flags=re.S)
+                s = re.sub(r"<dcterms:(created|modified)[^>]*>.*?</dcterms:\1>", "", s, flags=re.S)
                 data = s.encode("utf-8")
             zout.writestr(item, data)
     os.replace(tmp, path)
@@ -148,7 +150,7 @@ def scan(path, cfg=None, baseline=None, strict=True):
 
     for member, raw in _core_props(path):
         for tag in ("dc:creator", "cp:lastModifiedBy"):
-            m = re.search(r"<%s>(.*?)</%s>" % (tag, tag), raw)
+            m = re.search(r"<%s[^>]*>(.*?)</%s>" % (tag, tag), raw, re.S)
             if m and m.group(1).strip() not in ("", "None"):
                 problems.append("A4 文档属性 %s 残留「%s」" % (tag, m.group(1)[:40]))
 

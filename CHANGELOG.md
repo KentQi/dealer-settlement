@@ -5,6 +5,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **`--clean-props` 清不掉带命名空间声明的 `dc:creator`**：部分工作簿（经 WPS/Excel 另存）的 `docProps/core.xml` 把命名空间声明写在元素自身，形如 `<dc:creator xmlns:dc="…">openpyxl</dc:creator>`，原正则精确匹配 `<dc:creator>` 因此整条漏清；A4 文档属性断言用同一写法，也漏判。现改为**保留开标签属性、只清内容**（直接连属性一起替换会丢掉 `dc` 前缀声明，`core.xml` 变成不合法 XML），并补 `re.S` 兼容内容换行。
+
 ## [1.8.5] - 2026-11-13
 
 ### Added
