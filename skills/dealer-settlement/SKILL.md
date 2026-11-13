@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires Python 3.9+ with openpyxl, xlrd (>=2.0, .xls read), pdfplumber and read/write access to the workbook folder. Optional — Pillow + reportlab for the sheet-snapshot PDF (without them only PDF is skipped); Excel/WPS to open .xlsx; OCR for scanned contracts. L6 review runs in the harness LLM (scripts never call a model). Commands in bash with PowerShell equivalents.
 metadata:
   author: KentQi
-  version: "1.8.1"
+  version: "1.8.2"
 ---
 
 # 铺货代销全流程：建档 → 确认 → 对账 → 校验 → 复核
@@ -357,7 +357,7 @@ Windows / PowerShell 见第 0 节；`--out` 属于 `load_master.py`，`recon_eng
 
 **导出签章 PDF**（1.8.0 起为快照式）：把每张打印表的**活动区域**（有值单元格与合并区的包围盒）按真实版式（列宽 / 行高 / 合并 / 底色 / 边框 / 字体 / 对齐）绘成一张位图，等比缩放到**一整页 A4**、居中；四张图合成一份 **4 页 PDF**。**不得把一张表拆到多页，也不得改用流式重排**——乙方要看到「和 Excel 一样的一张纸」。
 
-默认四张表 `00 / 01 / 02 / 08`（与标红打印表一致），**页数恒等于表数**；方向 `auto`（按图片宽高比选横或纵）/ `landscape` / `portrait`；`--dpi` 控制打印清晰度（默认 300，按最终 A4 像素直接绘制，不做「先画大图再缩小」的二次重采样）；中文字体自动发现，也可用 `--font` 指定 TTF/TTC。命令：`python3 "$SKILL_DIR/scripts/export_pdf.py" --book <工作簿> --out <PDF> --period-cn "2026 年 10 月"`；或 `load_master.py --pdf` 让 `apply_v17.py` 在门禁通过后自动导出 `<期间>对账-签章件.pdf`。纯本地绘制，不依赖 Excel / LibreOffice。
+默认四张表 `00 / 01 / 02 / 08`（与标红打印表一致），**页数恒等于表数**；方向 `auto`（按图片宽高比选横或纵）/ `landscape` / `portrait`；`--dpi` 控制打印清晰度（默认 600，按最终 A4 像素直接绘制，不做「先画大图再缩小」的二次重采样；逐页写出，避免高 dpi 占满内存）；中文字体自动发现，也可用 `--font` 指定 TTF/TTC。命令：`python3 "$SKILL_DIR/scripts/export_pdf.py" --book <工作簿> --out <PDF> --period-cn "2026 年 10 月"`；或 `load_master.py --pdf` 让 `apply_v17.py` 在门禁通过后自动导出 `<期间>对账-签章件.pdf`。纯本地绘制，不依赖 Excel / LibreOffice。
 
 ## 7. 红线
 

@@ -274,7 +274,7 @@ def _compose(sheet_img, label, period_cn, page_no, total, land, dpi, font_path):
 
 
 def export(book, out, sheets, font_path="", period_cn="",
-           orientation="auto", dpi=300, scale=None):
+           orientation="auto", dpi=600, scale=None):
     font_path = find_font(font_path)
     wb = openpyxl.load_workbook(book, data_only=True)
     picked = []
@@ -285,7 +285,9 @@ def export(book, out, sheets, font_path="", period_cn="",
             raise SystemExit(1)
         picked.append((no, name))
 
-    pages, sizes, dirs = [], [], []
+    # 逐页渲染并立即写入：600 dpi 下单页位图约 100 MB，不能全部驻留内存
+    c, dirs, prev = None, [], None
+    total = len(picked)
     for i, (_, name) in enumerate(picked, 1):
         ws = wb[name]
         lw, lh = _logical_size(ws)
@@ -296,23 +298,21 @@ def export(book, out, sheets, font_path="", period_cn="",
         avail_w = pw - 2 * int(PAGE_MARGIN_IN * dpi)
         avail_h = ph - int(HEAD_IN * dpi) - int(FOOT_IN * dpi)
         img = render_sheet(ws, font_path, avail_w, avail_h)
-        page, size = _compose(img, name, period_cn, i, len(picked),
-                              land, dpi, font_path)
-        pages.append(page)
-        sizes.append(size)
-        dirs.append("横向" if land else "纵向")
-    wb.close()
-
-    c = pdf_canvas.Canvas(out, pagesize=sizes[0])
-    c.setTitle("铺货代销对账签章件")
-    c.setAuthor("")
-    for i, (page, size) in enumerate(zip(pages, sizes)):
-        if i and size != sizes[0]:
+        page, size = _compose(img, name, period_cn, i, total, land, dpi, font_path)
+        if c is None:
+            c = pdf_canvas.Canvas(out, pagesize=size)
+            c.setTitle("铺货代销对账签章件")
+            c.setAuthor("")
+        elif size != prev:
             c.setPageSize(size)
         c.drawImage(ImageReader(page), 0, 0, width=size[0], height=size[1])
         c.showPage()
+        dirs.append("横向" if land else "纵向")
+        prev = size
+        del img, page
+    wb.close()
     c.save()
-    return out, len(pages), dirs
+    return out, total, dirs
 
 
 def main():
@@ -324,8 +324,8 @@ def main():
     ap.add_argument("--period-cn", default="")
     ap.add_argument("--orientation", default="auto",
                     choices=("auto", "landscape", "portrait"))
-    ap.add_argument("--dpi", type=int, default=300,
-                    help="输出分辨率，默认 300（打印级）；越大越清晰、文件越大")
+    ap.add_argument("--dpi", type=int, default=600,
+                    help="输出分辨率，默认 600（印厂级）；越大越清晰、文件越大")
     a = ap.parse_args()
     if not os.path.exists(a.book):
         sys.stderr.write("[中止] 找不到工作簿：%s\n" % a.book)
