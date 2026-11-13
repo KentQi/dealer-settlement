@@ -42,6 +42,27 @@ def _ledger_closing(kind):
             - _ledger_sum(kind, "used"))
 
 
+def _ledger_kinds():
+    out = []
+    for _x in LEDGER:
+        _k = _x.get("kind")
+        if _k and _k not in out:
+            out.append(_k)
+    return out
+
+
+def _kinds_phrase(key):
+    """按台账实际出现的物料类型生成「试用装 20 件、中小样 240 件、赠品 1 件」。"""
+    return "、".join("%s %s 件" % (k, format(_ledger_sum(k, key) if key != "closing"
+                                            else _ledger_closing(k), ","))
+                    for k in _ledger_kinds())
+
+
+def _policy_clause():
+    _note = str((KJD.get("promo") or {}).get("policy_note") or "").strip()
+    return "该部分货品" + _note + "，不参与货款结算" if _note else "该部分不参与货款结算"
+
+
 def _cfg_fail(detail, missing=()):
     """缺配置时中止：stdout 必须为空，全部信息走 stderr。"""
     msg = [
@@ -1641,15 +1662,12 @@ concl = [
     f"6. 本期结算金额 {T['settle']:,.2f} 元；期末未结算货值（甲方账面）{BOOK_END:,.2f} 元。",
 ] + ([f"7. 贴花费用：按本期动销 {T['q10']} 件 × 各单品当期生效贴花标准计算，合计 {TH_TOTAL:,.2f} 元，明细见对账单第三节；兑付方式由双方书面确认。"] if TH_ACTIVE else [])
 if V17:
-    concl.append(f"{len(concl) + 1}. 试用装／中小样：期初 "
-                 f"{_ledger_sum('试用装', 'opening') + _ledger_sum('中小样', 'opening'):,} 件，"
-                 f"本期期间发货试用装 {_ledger_sum('试用装', 'shipped'):,} 件、"
-                 f"中小样 {_ledger_sum('中小样', 'shipped'):,} 件；"
-                 f"乙方使用试用装 {_ledger_sum('试用装', 'used')} 件、"
-                 f"中小样 {_ledger_sum('中小样', 'used')} 件；"
-                 f"期末结存试用装 {_ledger_closing('试用装')} 件、"
-                 f"中小样 {_ledger_closing('中小样')} 件。"
-                 f"该部分不参与货款结算，明细见附表 08。")
+    _open_all = sum(_ledger_sum(k, "opening") for k in _ledger_kinds())
+    concl.append(f"{len(concl) + 1}. 试用装／中小样：期初均为 {_open_all:,} 件，"
+                 f"本期期间发货{_kinds_phrase('shipped')}；"
+                 f"乙方使用{_kinds_phrase('used')}；"
+                 f"期末结存{_kinds_phrase('closing')}。"
+                 f"{_policy_clause()}，明细见附表 08。")
     if EXPIRY_ON:
         concl.append(f"{len(concl) + 1}. 商品批次效期提示：在库商品按剩余效期分档列示，"
                      f"明细见附表 09。")
@@ -1686,11 +1704,10 @@ _asks_raw += [("非结算类库存归属", f"{len(extra)} 个单品共 {EXTRA_Q:
                                if ADD_BACK else "库存导出日不晚于期末，无导出日前销售需回加"), "请书面回复确认")]
 if V17:
     _asks_raw.append(("试用装／中小样使用数量",
-                      f"期初 {_ledger_sum('试用装', 'opening') + _ledger_sum('中小样', 'opening'):,} 件；"
-                      f"期间发货 试用装 {_ledger_sum('试用装', 'shipped'):,} 件、"
-                      f"中小样 {_ledger_sum('中小样', 'shipped'):,} 件；"
-                      f"使用 {_ledger_sum('试用装', 'used')} 件、{_ledger_sum('中小样', 'used')} 件；"
-                      f"期末 {_ledger_closing('试用装')} 件、{_ledger_closing('中小样')} 件",
+                      f"期初 {_open_all:,} 件；"
+                      f"期间发货 {_kinds_phrase('shipped')}；"
+                      f"使用 {_kinds_phrase('used')}；"
+                      f"期末 {_kinds_phrase('closing')}",
                       "请签章确认上述使用数量与期末数量；如有差异请附明细说明"))
     if EXPIRY_ON:
         _asks_raw.append(("近效期库存处理", "在库商品按剩余效期分档列示（附表 09）",

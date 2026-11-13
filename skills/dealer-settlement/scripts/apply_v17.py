@@ -202,7 +202,11 @@ def build_08(wb, kj, sidecar):
     ws.merge_cells(start_row=r, start_column=7, end_row=r, end_column=9)
     r += 1
     totals = {}
-    for kind in ("试用装", "中小样", "配赠"):
+    kinds = []
+    for _x in rows:
+        if _x.get("kind") and _x["kind"] not in kinds:
+            kinds.append(_x["kind"])
+    for kind in kinds:
         items = [x for x in rows if x.get("kind") == kind]
         if not items:
             continue

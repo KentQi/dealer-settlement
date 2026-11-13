@@ -104,7 +104,8 @@ DEFAULT_DECISIONS = {
         "source": "商品分类", "settle": True,
         "正装": 0, "试用装": 0, "中小样": 0,
     },
-    "promo": {"settle": False, "separate_sheet": True, "confirm_by_party_b": True},
+    "promo": {"settle": False, "separate_sheet": True, "confirm_by_party_b": True,
+              "policy_note": ""},
     "rolling": {"opening_source": "上期甲方期末", "carry_forward": True,
                 "first_period_opening": 0},
     "usage": {

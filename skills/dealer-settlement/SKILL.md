@@ -1,11 +1,11 @@
 ---
 name: dealer-settlement
-description: 铺货代销（代销 / 铺货）对账作业包：① 从经销合同识别关键字段、生成 HTML 确认页、经人工逐项确认后写入客户主档；② 阶段 G 口径确认门禁——任何业务口径未逐项确认即阻断出账，答案落 _口径确认.json 并绑定复核锁；③ 用主档 + 当期导出生成对账工作簿（00–07 结算核心 + 08 试用装与中小样四栏滚动台账 + 09 商品批次效期提示，09 由开关控制、能力完整保留）；④ 五层确定性校验 L1–L5 + L6 LLM 语义复核门禁；⑤ 结构漂移识别与映射确认；⑥ 确认单零文件操作；⑦ 增量补表（01–07 零差异）与 00/01/02/08 合成签章 PDF。当用户要求「识别合同 / 建客户档」「某月对账 / 算应结算金额 / 核对库存 / 出对账单 / 算贴花」「复核本次出账 / 验收」「怎么操作 / 需要准备什么材料」，或提到「字段名 / 表名 / 列顺序不一致」「确认页提交 / 自动定位确认单」「批次效期 / 临期预警 / 效期提醒」「试用装 / 中小样 / 配赠 / 赠品使用量」「给已有工作簿补附表 / 导出 PDF 给客户盖章」「这期不做效期 / 下期恢复」时使用。判据与校验通用，但单据版式与披露文案按「品牌方 × 经销商（示例）」场景打磨，换客户首次出账需复核版式。
+description: 铺货代销（代销 / 铺货）对账作业包：① 从经销合同识别关键字段、生成 HTML 确认页、经人工逐项确认后写入客户主档；② 阶段 G 口径确认门禁——任何业务口径未逐项确认即阻断出账，答案落 _口径确认.json 并绑定复核锁；③ 用主档 + 当期导出生成对账工作簿（00–07 结算核心 + 08 试用装与中小样四栏滚动台账 + 09 商品批次效期提示，09 由开关控制、能力完整保留）；④ 五层确定性校验 L1–L5 + L6 LLM 语义复核门禁；⑤ 结构漂移识别与映射确认；⑥ 确认单零文件操作；⑦ 增量补表（01–07 零差异）与四张打印表活动区域快照（一表一页 A4）合成签章 PDF。当用户要求「识别合同 / 建客户档」「某月对账 / 算应结算金额 / 核对库存 / 出对账单 / 算贴花」「复核本次出账 / 验收」「怎么操作 / 需要准备什么材料」，或提到「字段名 / 表名 / 列顺序不一致」「确认页提交 / 自动定位确认单」「批次效期 / 临期预警 / 效期提醒」「试用装 / 中小样 / 配赠 / 赠品使用量」「给已有工作簿补附表 / 导出 PDF 给客户盖章」「这期不做效期 / 下期恢复」时使用。判据与校验通用，但单据版式与披露文案按「品牌方 × 经销商（示例）」场景打磨，换客户首次出账需复核版式。
 license: MIT
-compatibility: Requires Python 3.9+ with openpyxl, xlrd (>=2.0, .xls read), pdfplumber and read/write access to the workbook folder. Optional — reportlab for PDF export (without it only PDF is skipped); Excel/WPS to open .xlsx; OCR for scanned contracts. L6 review runs in the harness LLM (scripts never call a model). Commands in bash with PowerShell equivalents.
+compatibility: Requires Python 3.9+ with openpyxl, xlrd (>=2.0, .xls read), pdfplumber and read/write access to the workbook folder. Optional — Pillow + reportlab for the sheet-snapshot PDF (without them only PDF is skipped); Excel/WPS to open .xlsx; OCR for scanned contracts. L6 review runs in the harness LLM (scripts never call a model). Commands in bash with PowerShell equivalents.
 metadata:
   author: KentQi
-  version: "1.7.1"
+  version: "1.8.0"
 ---
 
 # 铺货代销全流程：建档 → 确认 → 对账 → 校验 → 复核
@@ -309,6 +309,10 @@ Windows / PowerShell 见第 0 节；`--out` 属于 `load_master.py`，`recon_eng
 - ② 乙方提供：逐物料给数；
 - ③ 未提供：使用与期末显示「—」，**不按 0、不按销量或经验比例推算**，并列入待确认。
 
+**物料类型动态**：类型取自 `usage.ledger` 里实际出现的 `kind`（试用装 / 中小样 / 赠品 / 配赠 …），不写死两类；00 表结论与待确认也按同一批类型生成，逐类给出发货、使用、期末数量。
+
+**政策说明片段**：`decisions.promo.policy_note` 是经阶段 G 确认的对外说明（如「为甲方政策支持」）。非空时 00 表结论写「该部分货品{policy_note}，不参与货款结算」；为空时只写「该部分不参与货款结算」。**该片段必须逐期确认、不得默认继承**，也不得把内部政策依据或费用目的写进去。
+
 **对外呈现**：表头固定「甲方期初 / 期间发货 / 乙方使用 / 甲方期末」；表内不出现正装数量、单价、金额、结算字样；含「不参与货款结算」声明与乙方签章区。「对应正装 / 本期正装销量」两列是否保留由阶段 G 决定（默认保留，需接受乙方可反推规律的风险）。
 
 **红线**：不编造乙方使用量；不把出数规则、内部费用目的写进单据；不写「未经乙方确认」「乙方报告使用」等自我否定或误导措辞；只给数量、不算金额。
@@ -351,7 +355,9 @@ Windows / PowerShell 见第 0 节；`--out` 属于 `load_master.py`，`recon_eng
 
 **给已有工作簿增量补附表**（1.7.0 新增）：先只读盘点并回述「这份是 X 期的簿子，现在有 N 张表，对吗？」→ 发业务语言卡片确认「哪几张表一个字都不能动 / 补哪几张、编号排第几 / 00 表是否只加说明」→ 逐项确认口径（含效期这期做不做）→ 出现「你没看懂」「不要写到纸面上」等纠正信号立即丢弃草稿、只重发被纠正项 → 写 `_口径确认.json` → dry-run 展示表号、源列、对外文案、隔离清单 → 确认后生成并跑 A1–A6 断言（`01–07` 零差异、`00` 只加说明、附表整张重做、禁止词零命中、关闭效期零字样）→ 任一断言失败不交付、不覆盖。命令：`load_master.py --mode incremental --in-workbook <簿> --overwrite`，随后 `recon_engine.py` 与 `apply_v17.py`。
 
-**导出签章 PDF**（1.7.0 新增）：`load_master.py --pdf`（可加 `--pdf-sheets 00,01,02,08`），`apply_v17.py` 在门禁通过后自动把四张打印表合成一份 `<期间>对账-签章件.pdf`；或单独跑 `python3 "$SKILL_DIR/scripts/export_pdf.py" --book <工作簿> --out <PDF>`。中文字体自动发现，找不到时按报错用 `--font` 指定。
+**导出签章 PDF**（1.8.0 起为快照式）：把每张打印表的**活动区域**（有值单元格与合并区的包围盒）按真实版式（列宽 / 行高 / 合并 / 底色 / 边框 / 字体 / 对齐）绘成一张位图，等比缩放到**一整页 A4**、居中；四张图合成一份 **4 页 PDF**。**不得把一张表拆到多页，也不得改用流式重排**——乙方要看到「和 Excel 一样的一张纸」。
+
+默认四张表 `00 / 01 / 02 / 08`（与标红打印表一致），**页数恒等于表数**；方向 `auto`（按图片宽高比选横或纵）/ `landscape` / `portrait`；`--dpi` 控制打印清晰度（默认 150）；中文字体自动发现，也可用 `--font` 指定 TTF/TTC。命令：`python3 "$SKILL_DIR/scripts/export_pdf.py" --book <工作簿> --out <PDF> --period-cn "2026 年 10 月"`；或 `load_master.py --pdf` 让 `apply_v17.py` 在门禁通过后自动导出 `<期间>对账-签章件.pdf`。纯本地绘制，不依赖 Excel / LibreOffice。
 
 ## 7. 红线
 
@@ -388,7 +394,8 @@ Windows / PowerShell 见第 0 节；`--out` 属于 `load_master.py`，`recon_eng
 20. **内部规则绝不上纸面**。`internal_only` 内容不得以任何载体进入单据（单元格、批注、页眉页脚、文档属性、表名）；使用量等内部出数规则**只出数字**。
 21. **口径变更须重走门禁**。改结存依据 / 分档 / 基准日 / 表号 / 模块开关 / 使用量规则，必须重发问卡、重新确认、重新出账、重做 L6；禁止就地改 JSON 后直接重跑。
 22. **增量补表不碰旧表**。`frozen_sheets` 一个字不改，`00` 只加说明，重做的表整张重建；任何越界即阻断。
-23. **效期能力不得删除**。某期不做效期只能用 `expiry.enabled=false`，不得删代码、删文档或删演示夹具；关闭时 00 表三处引用同步裁剪。
+23. **签章件一表一页**。PDF 必须由活动范围快照生成，每张表缩放到一整页 A4；不得把一张表拆到多页，也不得改用流式重排。
+24. **效期能力不得删除**。某期不做效期只能用 `expiry.enabled=false`，不得删代码、删文档或删演示夹具；关闭时 00 表三处引用同步裁剪。
 
 ## 8. 已知坑
 

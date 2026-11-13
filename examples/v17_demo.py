@@ -107,6 +107,10 @@ def main():
         check(heads[:5] == ["类型", None, "甲方期初", "期间发货", "乙方使用"],
               "08 表四栏台账表头正确")
         check("结转下期" in all_text(BOOK), "08 表含期末结转说明")
+        t0 = "\n".join(str(c.value) for row in openpyxl.load_workbook(BOOK, data_only=True)["00-对账说明"].iter_rows()
+                        for c in row if c.value is not None)
+        check("甲方政策支持" in t0, "00 表结论含经确认的政策说明片段")
+        check(all(k in t0 for k in ("试用装", "中小样")), "00 表结论按台账类型动态列示")
         wb.close()
         txt = all_text(BOOK)
         check(not any(k in txt for k in ("效期", "批次", "到期", "临期", "预警")),
@@ -179,8 +183,8 @@ def main():
         print("\n[6] 签章 PDF：四表合成一份")
         sys.path.insert(0, SCRIPTS)
         try:
-            from export_pdf import register_font
-            register_font()
+            from export_pdf import find_font
+            find_font()
             has_font = True
         except Exception:
             has_font = False
@@ -197,7 +201,13 @@ def main():
         try:
             import pymupdf
             d = pymupdf.open(pdf)
-            check(d.page_count >= 4, "PDF 至少 4 页（实际 %d 页）" % d.page_count)
+            check(d.page_count == 4, "一表一页：PDF 恰为 4 页（实际 %d 页）" % d.page_count)
+            for _i in range(d.page_count):
+                _pg = d[_i]
+                _w, _h = _pg.rect.width, _pg.rect.height
+                check(abs(min(_w, _h) - 595.28) < 2 and abs(max(_w, _h) - 841.89) < 2,
+                      "第 %d 页为 A4" % (_i + 1))
+                check(len(_pg.get_images()) == 1, "第 %d 页只含一张活动区域快照" % (_i + 1))
             d.close()
         except ImportError:
             print("  · 跳过页数校验（未装 pymupdf）")
