@@ -1534,6 +1534,7 @@ def setup(ws, widths, orient="portrait"):
     for i, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
     ws.sheet_view.showGridLines = False
+    ws.print_options.gridLines = False
     ws.page_setup.paperSize = 9
     ws.page_setup.orientation = orient
     ws.sheet_properties.pageSetUpPr = PageSetupProperties(fitToPage=True)

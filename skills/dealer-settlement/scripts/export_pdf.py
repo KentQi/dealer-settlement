@@ -191,6 +191,16 @@ def render_sheet(ws, font_path, target_w, target_h):
     img = Image.new("RGB", (W, H), "white")
     draw = ImageDraw.Draw(img)
 
+    # 空白行不画框：否则章节之间的空行会显示成一排竖线
+    filled_rows = set()
+    for r in range(r0, r1 + 1):
+        for c in range(c0, c1 + 1):
+            if ws.cell(row=r, column=c).value not in (None, ""):
+                filled_rows.add(r)
+    for rg in ws.merged_cells.ranges:
+        for r in range(rg.min_row, rg.max_row + 1):
+            filled_rows.add(r)
+
     merged_at, hidden = {}, set()
     for rg in ws.merged_cells.ranges:
         merged_at[(rg.min_row, rg.min_col)] = rg
@@ -221,6 +231,8 @@ def render_sheet(ws, font_path, target_w, target_h):
             x0, y0 = xs[c], ys[r]
             x1, y1 = xs[ec + 1], ys[er + 1]
             cell = ws.cell(row=r, column=c)
+            if r not in filled_rows:
+                continue
             bg = _rgb(cell.fill.fgColor if cell.fill else None)
             if bg and bg != (255, 255, 255) and getattr(cell.fill, "patternType", None):
                 draw.rectangle([x0, y0, x1 - 1, y1 - 1], fill=bg)

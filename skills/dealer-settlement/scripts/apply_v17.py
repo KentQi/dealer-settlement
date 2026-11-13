@@ -86,6 +86,7 @@ def hdr(ws, r, c1, labels, height=26):
 
 def setup(ws, widths, orientation="landscape"):
     ws.sheet_view.showGridLines = False
+    ws.print_options.gridLines = False
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
     ws.page_setup.orientation = orientation

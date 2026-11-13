@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires Python 3.9+ with openpyxl, xlrd (>=2.0, .xls read), pdfplumber and read/write access to the workbook folder. Optional — Pillow + reportlab for the sheet-snapshot PDF (without them only PDF is skipped); Excel/WPS to open .xlsx; OCR for scanned contracts. L6 review runs in the harness LLM (scripts never call a model). Commands in bash with PowerShell equivalents.
 metadata:
   author: KentQi
-  version: "1.8.3"
+  version: "1.8.4"
 ---
 
 # 铺货代销全流程：建档 → 确认 → 对账 → 校验 → 复核
@@ -356,6 +356,8 @@ Windows / PowerShell 见第 0 节；`--out` 属于 `load_master.py`，`recon_eng
 **给已有工作簿增量补附表**（1.7.0 新增）：先只读盘点并回述「这份是 X 期的簿子，现在有 N 张表，对吗？」→ 发业务语言卡片确认「哪几张表一个字都不能动 / 补哪几张、编号排第几 / 00 表是否只加说明」→ 逐项确认口径（含效期这期做不做）→ 出现「你没看懂」「不要写到纸面上」等纠正信号立即丢弃草稿、只重发被纠正项 → 写 `_口径确认.json` → dry-run 展示表号、源列、对外文案、隔离清单 → 确认后生成并跑 A1–A6 断言（`01–07` 零差异、`00` 只加说明、附表整张重做、禁止词零命中、关闭效期零字样）→ 任一断言失败不交付、不覆盖。命令：`load_master.py --mode incremental --in-workbook <簿> --overwrite`，随后 `recon_engine.py` 与 `apply_v17.py`。
 
 **导出签章 PDF**（1.8.0 起为快照式）：把每张打印表的**活动区域**（有值单元格与合并区的包围盒）按真实版式（列宽 / 行高 / 合并 / 底色 / 边框 / 字体 / 对齐）绘成一张位图，等比缩放到**一整页 A4**、居中；四张图合成一份 **4 页 PDF**。**不得把一张表拆到多页，也不得改用流式重排**——乙方要看到「和 Excel 一样的一张纸」。
+
+**白底与框线**：所有工作表 `showGridLines=False`、`print_options.gridLines=False`；PDF 快照**空白行不画框**（否则章节之间的空行会显示成一排竖线），只保留有内容行/列的边框，背景纯白。
 
 **单元格文本策略**：优先一行（缩字号 ≤18% 且留 3% 安全余量）；一行放不下再按行高决定缩字号（最多 30%）或折行；断行优先落在 `·；，。、）】》` 之后，避免把「版本」拆成「版」「本）」。只有缩到 70% 仍放不下才截断，并在 stderr 点名单元格。
 

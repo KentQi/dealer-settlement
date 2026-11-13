@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "dealer-settlement",
-  "version": "1.8.3",
+  "version": "1.8.4",
   "description": "铺货代销对账技能包：合同建档、月度对账 对账工作簿工作簿、贴花计算与五层校验。Dealer consignment settlement reconciliation skill for AI agents: contract intake, monthly reconciliation workbook, sales-rebate (tiehua) calculation, and five-layer deterministic validation.",
   "author": {
     "name": "KentQi",
