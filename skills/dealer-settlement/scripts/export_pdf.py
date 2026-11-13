@@ -38,6 +38,8 @@ FONT_CANDIDATES = [
 ]
 
 GREY_LINE = (217, 217, 217)
+# 断行优先落在这些字符之后，避免把「版本」拆成「版」「本）」
+BREAK_AFTER = "·；，。、）】》：!?！？ "
 INK = (31, 56, 100)
 FOOT = (140, 140, 140)
 A4_PT = (595.28, 841.89)
@@ -123,6 +125,7 @@ def _logical_size(ws):
 
 
 def _wrap(draw, text, font, max_w):
+    """按宽度折行；超宽时优先回退到最近的标点之后，找不到才硬断。"""
     lines = []
     for para in str(text).split("\n"):
         if not para:
@@ -130,11 +133,20 @@ def _wrap(draw, text, font, max_w):
             continue
         cur = ""
         for ch in para:
-            if draw.textlength(cur + ch, font=font) > max_w and cur:
+            if draw.textlength(cur + ch, font=font) <= max_w or not cur:
+                cur += ch
+                continue
+            cut = -1
+            for i in range(len(cur) - 1, max(0, int(len(cur) * 0.55)) - 1, -1):
+                if cur[i] in BREAK_AFTER:
+                    cut = i + 1
+                    break
+            if cut > 0:
+                lines.append(cur[:cut])
+                cur = cur[cut:] + ch
+            else:
                 lines.append(cur)
                 cur = ch
-            else:
-                cur += ch
         lines.append(cur)
     return lines
 
@@ -224,9 +236,34 @@ def render_sheet(ws, font_path, target_w, target_h):
             fg = _rgb(f.color, (0, 0, 0))
             if fg == (0, 0, 0) and f.color and getattr(f.color, "theme", None) is not None:
                 fg = INK
-            pad = max(1.0, 3.0 * s)
-            lines = _wrap(draw, txt, font, max(1.0, x1 - x0 - 2 * pad))
+            pad = max(1.0, 2.0 * s)
+            avail_w = max(1.0, x1 - x0 - 2 * pad)
             lh_px = size * 1.22
+            max_lines = max(1, int((y1 - y0 - 2 * pad) / lh_px))
+            lines = _wrap(draw, txt, font, avail_w)
+            # 优先一行：缩字号 ≤18% 能放下就不折行（贴近 Excel 里「明明一行放得下」的观感）
+            one_w = 0.0 if "\n" in txt else draw.textlength(txt, font=font)
+            if one_w > avail_w:
+                fit = (avail_w * 0.97) / one_w      # 留 3% 安全余量，避免压到边框
+                if fit >= 0.82:
+                    font = _font(size * fit, f.b)
+                    lines = [txt]
+                    size *= fit
+                    lh_px = size * 1.22
+            # 仍放不下行高时再缩字号（最多 70%），而不是折行后被下一节盖住
+            if len(lines) > max_lines:
+                for k in (0.95, 0.9, 0.85, 0.8, 0.75, 0.7):
+                    f2 = _font(size * k, f.b)
+                    l2 = _wrap(draw, txt, f2, avail_w)
+                    if len(l2) <= max_lines:
+                        font, lines = f2, l2
+                        size *= k
+                        lh_px = size * 1.22
+                        break
+                else:
+                    lines = lines[:max_lines]
+                    sys.stderr.write("[提示] %s!%s 文本超出行高，已截断\n"
+                                     % (ws.title, cell.coordinate))
             total = lh_px * len(lines)
             ty = y0 + max(pad, (y1 - y0 - total) / 2)
             if not (cell.alignment and cell.alignment.wrap_text) and len(lines) > 1:
