@@ -1700,7 +1700,7 @@ r += 1
 _asks_raw = [("本月结算金额确认", f"{T['settle']:,.2f} 元／{T['q10']} 件，逐 SKU 核对单价与动销数量", f"签章确认，确认后 {CT_SIGN_TXT}内寄回原件")]
 if diff_rows:
     _asks_raw.append(("库存差异说明", f"净 {T['diff']:+d} 件／{T['diff_amt']:,.2f} 元，逐 SKU 书面说明并提供支持单据", f"收到后 {CT_OBJ_TXT}内书面回复"))
-_asks_raw += [("非结算类库存归属", f"{len(extra)} 个单品共 {EXTRA_Q:,} 件，未纳入本期结算范围", "请确认归属与结算属性"),
+_asks_raw += [("非结算类货品说明", f"{len(extra)} 个单品共 {EXTRA_Q:,} 件，未列入甲方挂账台账，不属甲方铺货货品，不纳入本期结算范围", "上述货品归属另行确定，不参与本期及后续货款结算；请乙方核对数量"),
               ("结算期间划分", (f"{NEXT_LABEL}销售 {T['q11']} 件（{NOV_VAL:,.2f} 元）回加库存、不计入本期"
                                if ADD_BACK else "库存导出日不晚于期末，无导出日前销售需回加"), "请书面回复确认")]
 if V17:
@@ -2128,7 +2128,7 @@ if absent_rows:
     r += 1
 print("02 part ok")
 
-sec(ws, r, 1, 16, f"{_ns()}、非结算类库存（{len(extra)} 个单品，共 {EXTRA_Q:,} 件，甲方账面未挂账，不参与本期结算）"); r += 1
+sec(ws, r, 1, 16, f"{_ns()}、非结算类货品（{len(extra)} 个单品，共 {EXTRA_Q:,} 件，未列入甲方挂账台账，不纳入本期结算）"); r += 1
 hdr(ws, r, 1, ["序号", "商品条码", "商品名称", "规格", "单位", "零售价\n（元）", "库存数量", "说　　明"], 32, fl="7F7F7F")
 ws.merge_cells(start_row=r, start_column=8, end_row=r, end_column=16)
 r += 1
@@ -2141,7 +2141,7 @@ for i, x in enumerate(extra, 1):
     mput(ws, r, 5, r, 5, "片", F(8.5), A("center"), bg)
     cell = ws.cell(row=r, column=6); num(cell, x["retail"], "#,##0.00"); cell.fill = fill(bg)
     cell = ws.cell(row=r, column=7); num(cell, x["qty"]); cell.fill = fill(bg)
-    note = "未纳入本期结算范围，本表仅列数量，请乙方确认归属"
+    note = "未列入甲方挂账台账，不属甲方铺货货品；归属另行确定，数量以乙方库存为准"
     mput(ws, r, 8, r, 16, note, F(8.5, False, DGREY), A("left", "center", True, 1), bg)
     ws.row_dimensions[r].height = 22
     r += 1
@@ -2151,7 +2151,7 @@ cell = ws.cell(row=r, column=6); cell.value = None; cell.fill = fill(LBLUE)
 cell.border = Border(left=THIN, right=THIN, top=MED, bottom=MED)
 cell = ws.cell(row=r, column=7); num(cell, EXTRA_Q); cell.font = F(9, True, NAVY); cell.fill = fill(LBLUE)
 cell.border = Border(left=THIN, right=THIN, top=MED, bottom=MED)
-mput(ws, r, 8, r, 16, "不参与本期结算，仅作数量与归属确认", F(8.5, False, DGREY), A("left", "center", True, 1), LBLUE)
+mput(ws, r, 8, r, 16, "不参与本期及后续结算，仅核对数量", F(8.5, False, DGREY), A("left", "center", True, 1), LBLUE)
 ws.row_dimensions[r].height = 24
 r += 2
 
@@ -2470,7 +2470,7 @@ for i, x in enumerate(inv_sorted, 1):
         cell = ws.cell(row=r, column=11); cell.value = "—"; cell.font = F(9, c="A6A6A6")
         cell.alignment = A("center"); cell.fill = fill(bg)
     note = ""
-    if not st: note = "未纳入本期结算范围，本表仅列数量，请乙方确认归属"
+    if not st: note = "未列入甲方挂账台账，不属甲方铺货货品；归属另行确定，数量以乙方库存为准"
     if x["qty"] == 0: note = "本期无库存"
     mput(ws, r, 12, r, 12, note or "—", F(8, c=DGREY), A("left", "center", True, 1), bg)
     ws.row_dimensions[r].height = 24
@@ -2496,7 +2496,7 @@ for j in (7, 8, 9, 10):
 cell = ws.cell(row=r, column=11); cell.value = "不估值"; cell.font = F(9, False, WHITE)
 cell.alignment = A("center"); cell.fill = fill("7F7F7F")
 cell.border = Border(left=THIN, right=THIN, top=MED, bottom=MED)
-mput(ws, r, 12, r, 12, "未纳入本期结算范围", F(8, False, WHITE), A("center"), "7F7F7F")
+mput(ws, r, 12, r, 12, "未列入甲方挂账台账", F(8, False, WHITE), A("center"), "7F7F7F")
 ws.row_dimensions[r].height = 26
 r += 2
 mput(ws, r, 1, r, 12, f"说明：{len(inv)} 个单品中 {len(inv) - len(extra)} 个为结算类（已挂账），库存货值合计 {tot_v:,.2f} 元，"
