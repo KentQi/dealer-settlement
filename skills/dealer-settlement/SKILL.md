@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires Python 3.9+ with openpyxl, xlrd (>=2.0, .xls read), pdfplumber and read/write access to the workbook folder. Optional — Pillow + reportlab for the sheet-snapshot PDF (without them only PDF is skipped); Excel/WPS to open .xlsx; OCR for scanned contracts. L6 review runs in the harness LLM (scripts never call a model). Commands in bash with PowerShell equivalents.
 metadata:
   author: KentQi
-  version: "1.9.0"
+  version: "1.9.1"
 ---
 
 # 铺货代销全流程：建档 → 确认 → 对账 → 校验 → 复核
@@ -357,7 +357,7 @@ Windows / PowerShell 见第 0 节；`--out` 属于 `load_master.py`，`recon_eng
 
 **导出签章 PDF**（1.9.0 起为矢量分页）：把每张打印表的**活动区域**（有值单元格与合并区的包围盒）按真实版式（列宽 / 行高 / 合并 / 底色 / 边框 / 字体 / 对齐）**直接绘制成矢量 PDF 对象**（文字可选中、可搜索、放大不虚），字体按子集嵌入，成品通常几百 KB。
 
-**版式规则：宽度填满、高度切页**。表格宽度缩放到 A4 可用宽度（缩放比上限 1.0，小表不放大），超出可用高度就分页；续页**顶部对齐**并**重复加粗表头行**，页脚标注「第 x 页 / 共 y 页」。**不再强制「一表一页」**——那是早期做法，会把 01 表压到 3.97pt，600 dpi 也救不回来；**字号由「表格宽度 ÷ A4 宽度」决定，不是 dpi**。方向 `auto`：纵向缩放比 ≥0.85 用纵向，否则横向明显更大（>10%）时转横向；也可强制 `landscape` / `portrait`。
+**版式规则：宽度填满、高度切页**。表格宽度缩放到 A4 可用宽度（缩放比上限 1.0，小表不放大），超出可用高度就分页；续页**顶部对齐**并**重复加粗表头行**，页脚标注「第 x 页 / 共 y 页」。**不再强制「一表一页」**——那是早期做法，会把 01 表压到 3.97pt，600 dpi 也救不回来；**字号由「表格宽度 ÷ A4 宽度」决定，不是 dpi**。**方向全簿统一**，保证所有页宽度一致（不会一半纵向一半横向）：`auto` 时分别按纵向 / 横向试算每张表的缩放比，取「最小缩放比更大」的方向整体应用；也可强制 `landscape` / `portrait`。
 
 **白底与框线**：所有工作表 `showGridLines=False`、`print_options.gridLines=False`；PDF **空白行不画框**（否则章节之间的空行会显示成一排竖线），只保留有内容行/列的边框，背景纯白。**单元格文本策略**：优先一行（缩字号 ≤18% 且留 3% 安全余量）；一行放不下再按行高决定缩字号（最多 30%，**缩字号后重算可容纳行数**）或折行；断行优先落在 `·；，。、）】》` 之后，避免把「版本」拆成「版」「本）」。只有缩到 70% 仍放不下才截断，并在 stderr 点名单元格。
 

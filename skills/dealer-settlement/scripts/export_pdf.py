@@ -281,6 +281,25 @@ def _plan(ws, orientation="auto"):
     return c
 
 
+def _decide_global(wb, picked, orientation):
+    """全簿统一页面方向，保证所有页宽度一致。
+
+    auto 时分别按纵向 / 横向计算每张表的缩放比，取「最小缩放比更大」的方向：
+    最小缩放比决定全簿最丑的那张表，优先把它抬高。
+    """
+    if orientation in ("portrait", "landscape"):
+        return orientation
+    score = {"portrait": [], "landscape": []}
+    for _, name in picked:
+        ws = wb[name]
+        (r0, c0, r1, c1), xs, ys, W, H = _grid(ws)
+        for key, land in (("portrait", False), ("landscape", True)):
+            wpt = A4_PT[1] if land else A4_PT[0]
+            aw = wpt - 2 * PAGE_MARGIN_IN * 72
+            score[key].append(min(1.0, aw / W))
+    return max(score, key=lambda k: min(score[k]))
+
+
 def draw_rows(c, ws, fontname, plan, rows, page_no, total, label, period_cn,
               header_row=None):
     """把 rows 画到当前页；header_row 非空时在页顶重复表头。"""
@@ -618,6 +637,8 @@ def export(book, out, sheets, font_path="", period_cn="",
             raise SystemExit(1)
         picked.append((no, name))
 
+    orient = _decide_global(wb, picked, orientation)
+
     if engine == "raster":
         from reportlab.lib.utils import ImageReader
         c, prev = None, None
@@ -627,7 +648,7 @@ def export(book, out, sheets, font_path="", period_cn="",
                          "需要分页请用默认 vector\n")
         for i, (no, name) in enumerate(picked, 1):
             ws = wb[name]
-            plan = _plan(ws, orientation)
+            plan = _plan(ws, orient)
             land = plan["land"]
             wpt, hpt = plan["wpt"], plan["hpt"]
             pw, ph = int(wpt / 72 * dpi), int(hpt / 72 * dpi)
@@ -653,7 +674,7 @@ def export(book, out, sheets, font_path="", period_cn="",
         c.save()
         return out, total, meta
 
-    plans = [(no, name, _plan(wb[name], orientation)) for no, name in picked]
+    plans = [(no, name, _plan(wb[name], orient)) for no, name in picked]
     total = sum(len(p["pages"]) for _, _, p in plans)
     c, page_no = None, 0
     for no, name, plan in plans:

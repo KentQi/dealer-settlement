@@ -210,6 +210,8 @@ def main():
                 check(len(_pg.get_images()) == 0, "第 %d 页为纯矢量（无位图）" % (_i + 1))
                 check(len(_pg.get_text().strip()) > 20, "第 %d 页含可提取文本" % (_i + 1))
             check(any("序号" in _pg.get_text() for _pg in d), "至少一页含表头「序号」")
+            _sizes = {(round(_p.rect.width), round(_p.rect.height)) for _p in d}
+            check(len(_sizes) == 1, "所有页面尺寸一致（宽度一致），实际 %s" % _sizes)
             d.close()
         except ImportError:
             print("  · 跳过页数校验（未装 pymupdf）")
