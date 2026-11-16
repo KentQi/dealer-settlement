@@ -201,13 +201,15 @@ def main():
         try:
             import pymupdf
             d = pymupdf.open(pdf)
-            check(d.page_count == 4, "一表一页：PDF 恰为 4 页（实际 %d 页）" % d.page_count)
+            check(d.page_count >= 4, "宽度填满+切页：至少 4 页（实际 %d 页）" % d.page_count)
             for _i in range(d.page_count):
                 _pg = d[_i]
                 _w, _h = _pg.rect.width, _pg.rect.height
                 check(abs(min(_w, _h) - 595.28) < 2 and abs(max(_w, _h) - 841.89) < 2,
                       "第 %d 页为 A4" % (_i + 1))
-                check(len(_pg.get_images()) == 1, "第 %d 页只含一张活动区域快照" % (_i + 1))
+                check(len(_pg.get_images()) == 0, "第 %d 页为纯矢量（无位图）" % (_i + 1))
+                check(len(_pg.get_text().strip()) > 20, "第 %d 页含可提取文本" % (_i + 1))
+            check(any("序号" in _pg.get_text() for _pg in d), "至少一页含表头「序号」")
             d.close()
         except ImportError:
             print("  · 跳过页数校验（未装 pymupdf）")

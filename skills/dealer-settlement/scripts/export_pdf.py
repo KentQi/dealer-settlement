@@ -1,19 +1,24 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""把指定工作表的「活动区域」各截成一张图，一表一页 A4，合成签章 PDF。
+"""把工作表活动区域按真实版式输出为 A4 签章 PDF。
 
-每张表按单元格真实版式（列宽 / 行高 / 合并 / 底色 / 边框 / 字体 / 对齐）
-**直接按最终 A4 像素尺寸绘制**（不先画大图再缩小，避免二次重采样把字糊掉），
-再居中放到一整页 A4 上。
+版式规则（v1.9）
+- **宽度填满**：表格宽度缩放到 A4 可用宽度，不再为了「一表一页」压缩字；
+- **高度切页**：内容超出可用高度就分页，页脚标注总页数；
+- 方向：默认 auto —— 纵向缩放比 ≥0.85 用纵向；否则若横向明显更大（>10%）用横向；
+- 字号不放大（缩放比上限 1.0），避免小表被撑得过大。
 
-- 默认导出 00 / 01 / 02 / 08 四张打印表，输出页数 == 表数
-- 默认 300 dpi（打印级）；--dpi 可调，越大越清晰、文件越大
-- 页面方向 auto（按表格长宽比选横/纵）/ landscape / portrait
-- 中文字体自动发现；也可用 --font 指定 TTF/TTC
-- 纯本地处理；不依赖 Excel / LibreOffice
+渲染后端
+- ``vector``（默认）：reportlab 直接绘制文字、边框、底色，文字是矢量（可选中、
+  可搜索、放大不虚），字体按子集嵌入。
+- ``raster``：PIL 按像素重绘再贴图（兜底，仍为单表一页）。
+
+注意：字号大小由「表格宽度 ÷ A4 宽度」决定。若某表列特别多（如 16 列），
+即使切页也受宽度限制；要再大只能横向、精简列或改纸张。
 """
 import argparse
 import datetime
+import math
 import json
 import os
 import re
@@ -21,8 +26,8 @@ import sys
 
 import openpyxl
 from openpyxl.utils import get_column_letter
-from PIL import Image, ImageDraw, ImageFont
-from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas as pdf_canvas
 
 FONT_CANDIDATES = [
@@ -38,12 +43,11 @@ FONT_CANDIDATES = [
 ]
 
 GREY_LINE = (217, 217, 217)
-# 断行优先落在这些字符之后，避免把「版本」拆成「版」「本）」
 BREAK_AFTER = "·；，。、）】》：!?！？ "
 INK = (31, 56, 100)
 FOOT = (140, 140, 140)
 A4_PT = (595.28, 841.89)
-PAGE_MARGIN_IN = 0.30      # 页面左右留白（英寸）
+PAGE_MARGIN_IN = 0.30
 HEAD_IN, FOOT_IN = 0.36, 0.30
 
 
@@ -51,14 +55,27 @@ def find_font(explicit=""):
     for p in ([explicit] if explicit else FONT_CANDIDATES):
         if p and os.path.exists(p):
             try:
-                ImageFont.truetype(p, 12, index=0)
+                TTFont("_probe", p, subfontIndex=0)
                 return p
             except Exception:
-                continue
+                try:
+                    TTFont("_probe2", p)
+                    return p
+                except Exception:
+                    continue
     sys.stderr.write(
-        "[中止] 找不到可用的中文字体，无法绘制表格快照。\n"
+        "[中止] 找不到可用的中文字体，无法绘制表格。\n"
         "请把本机 TTF/TTC 中文字体的完整路径传给 --font。\n")
     raise SystemExit(1)
+
+
+def register_font(path):
+    name = "CNBody"
+    try:
+        pdfmetrics.registerFont(TTFont(name, path, subfontIndex=0))
+    except Exception:
+        pdfmetrics.registerFont(TTFont(name, path))
+    return name
 
 
 def _rgb(color, default=None):
@@ -110,22 +127,35 @@ def _used_range(ws):
     return lo_r, lo_c, hi_r, hi_c
 
 
-def _logical_size(ws):
-    """按 1x（Excel 默认 96dpi 视口）估算活动区域的逻辑像素尺寸。"""
+def _grid(ws):
     r0, c0, r1, c1 = _used_range(ws)
-    lw = 0.0
+    xs, ys = {c0: 0.0}, {r0: 0.0}
     for c in range(c0, c1 + 1):
         dim = ws.column_dimensions.get(get_column_letter(c))
-        lw += (dim.width if dim and dim.width else 8.43) * 7.0
-    lh = 0.0
+        w_chars = dim.width if dim and dim.width else 8.43
+        xs[c + 1] = xs[c] + max(1.0, w_chars * 7.0 * 0.75)
     for r in range(r0, r1 + 1):
         dim = ws.row_dimensions.get(r)
-        lh += (dim.height if dim and dim.height else 15.0) * (96.0 / 72.0)
-    return max(1.0, lw), max(1.0, lh)
+        h = dim.height if dim and dim.height else 15.0
+        ys[r + 1] = ys[r] + max(1.0, h)
+    return (r0, c0, r1, c1), xs, ys, xs[c1 + 1], ys[r1 + 1]
 
 
-def _wrap(draw, text, font, max_w):
-    """按宽度折行；超宽时优先回退到最近的标点之后，找不到才硬断。"""
+def _main_font_size(ws):
+    from collections import Counter
+    r0, c0, r1, c1 = _used_range(ws)
+    sizes = Counter()
+    for row in ws.iter_rows(min_row=r0, max_row=r1, min_col=c0, max_col=c1):
+        for cell in row:
+            if cell.value not in (None, "") and cell.font and cell.font.sz:
+                sizes[float(cell.font.sz)] += 1
+    return sizes.most_common(1)[0][0] if sizes else 9.0
+
+
+def _wrap(text, fontname, size, max_w):
+    def w(t):
+        return pdfmetrics.stringWidth(t, fontname, size)
+
     lines = []
     for para in str(text).split("\n"):
         if not para:
@@ -133,7 +163,7 @@ def _wrap(draw, text, font, max_w):
             continue
         cur = ""
         for ch in para:
-            if draw.textlength(cur + ch, font=font) <= max_w or not cur:
+            if w(cur + ch) <= max_w or not cur:
                 cur += ch
                 continue
             cut = -1
@@ -152,7 +182,6 @@ def _wrap(draw, text, font, max_w):
 
 
 def _warn_section_merges(ws):
-    """章节标题行若未合并，快照右侧会出现一排竖线；提示而不是静默。"""
     bad = []
     for r in range(1, ws.max_row + 1):
         v = ws.cell(r, 1).value
@@ -168,20 +197,253 @@ def _warn_section_merges(ws):
                          "增删行后请同步移动合并区。\n" % (ws.title, "、".join(bad)))
 
 
-def render_sheet(ws, font_path, target_w, target_h):
-    """把活动区域**按目标像素尺寸直接绘制**（字号/线宽同步缩放，不再二次重采样）。"""
-    _warn_section_merges(ws)
-    r0, c0, r1, c1 = _used_range(ws)
-    lw, lh = _logical_size(ws)
-    s = min(float(target_w) / lw, float(target_h) / lh)
-
-    col_w, row_h = {}, {}
-    for c in range(c0, c1 + 1):
-        dim = ws.column_dimensions.get(get_column_letter(c))
-        col_w[c] = max(1.0, (dim.width if dim and dim.width else 8.43) * 7.0 * s)
+def _header_rows(ws, r0, c0, r1, c1):
+    """识别加粗表头行：加粗单元格过半且含常见列名关键词。"""
+    out = []
     for r in range(r0, r1 + 1):
-        dim = ws.row_dimensions.get(r)
-        row_h[r] = max(1.0, (dim.height if dim and dim.height else 15.0) * (96.0 / 72.0) * s)
+        cells = [ws.cell(row=r, column=col) for col in range(c0, c1 + 1)]
+        vals = [c.value for c in cells if c.value not in (None, "")]
+        if len(vals) < 2:
+            continue
+        nb = sum(1 for c in cells if c.font is not None and c.font.b)
+        text = " ".join(str(v) for v in vals)
+        if nb >= max(1, len(cells) // 3) and any(
+                k in text for k in ("序号", "商品名称", "项目", "类型")):
+            out.append(r)
+    return out
+
+
+def _plan(ws, orientation="auto"):
+    """决定方向、缩放比与分页：宽度填满，高度切页，字号不放大。"""
+    (r0, c0, r1, c1), xs, ys, W, H = _grid(ws)
+
+    def cand(land):
+        wpt, hpt = (A4_PT[1], A4_PT[0]) if land else A4_PT
+        aw = wpt - 2 * PAGE_MARGIN_IN * 72
+        ah = hpt - HEAD_IN * 72 - FOOT_IN * 72
+        return {"land": land, "wpt": wpt, "hpt": hpt, "aw": aw, "ah": ah,
+                "s": min(1.0, aw / W)}
+
+    p, l = cand(False), cand(True)
+    if orientation == "portrait":
+        c = p
+    elif orientation == "landscape":
+        c = l
+    else:
+        c = p if (p["s"] >= 0.85 or l["s"] <= p["s"] * 1.10) else l
+
+    # 平衡分页：先算需要几页，再按平均高度切；续页重复表头并从可用高度扣除
+    headers = _header_rows(ws, r0, c0, r1, c1)
+
+    def need_header(first):
+        prev = [h for h in headers if h < first]
+        return prev[-1] if prev else None
+
+    def hh(h):
+        return (ys[h + 1] - ys[h]) * c["s"] if h is not None else 0.0
+
+    total_h = sum((ys[r + 1] - ys[r]) * c["s"] for r in range(r0, r1 + 1))
+    n = max(1, int(math.ceil(total_h / c["ah"] - 1e-9)))
+    target = total_h / n
+    pages, metas, cur, cur_h, cur_hdr = [], [], [], 0.0, None
+    for r in range(r0, r1 + 1):
+        rh = (ys[r + 1] - ys[r]) * c["s"]
+        if not cur:
+            cur_hdr = need_header(r)
+        limit = c["ah"] - hh(cur_hdr)
+        if cur and (cur_h + rh > limit + 1e-6 or
+                    (len(pages) < n - 1 and cur_h >= target - 1e-9)):
+            pages.append(cur)
+            metas.append(cur_hdr)
+            cur, cur_h = [], 0.0
+            cur_hdr = need_header(r)
+            limit = c["ah"] - hh(cur_hdr)
+        cur.append(r)
+        cur_h += rh
+    if cur:
+        pages.append(cur)
+        metas.append(cur_hdr)
+
+    # 跨页合并区：只按左上角所在页绘制，提示核对
+    row_page = {}
+    for idx, rows in enumerate(pages):
+        for r in rows:
+            row_page[r] = idx
+    for rg in ws.merged_cells.ranges:
+        a, b = row_page.get(rg.min_row), row_page.get(rg.max_row)
+        if a is not None and b is not None and a != b:
+            sys.stderr.write("[提示] %s 的合并区 %s 跨页，已按首页裁断，请核对版式\n"
+                             % (ws.title, rg.coord))
+
+    c.update({"pages": pages, "hdr": metas, "xs": xs, "ys": ys, "W": W, "H": H,
+              "r0": r0, "c0": c0, "r1": r1, "c1": c1,
+              "main_pt": _main_font_size(ws) * c["s"]})
+    return c
+
+
+def draw_rows(c, ws, fontname, plan, rows, page_no, total, label, period_cn,
+              header_row=None):
+    """把 rows 画到当前页；header_row 非空时在页顶重复表头。"""
+    _warn_section_merges(ws)
+    s = plan["s"]
+    wpt, hpt = plan["wpt"], plan["hpt"]
+    c.setPageSize((wpt, hpt))
+    mx = PAGE_MARGIN_IN * 72
+    head_h = HEAD_IN * 72
+    aw = plan["aw"]
+
+    hs = 7.5
+    c.setFont(fontname, hs)
+    c.setFillColorRGB(*(v / 255.0 for v in INK))
+    head = ((period_cn + " 铺货代销对账 · 签章件  |  " + label) if period_cn
+            else ("铺货代销对账 · 签章件  |  " + label))
+    c.drawString(mx, hpt - 0.10 * 72 - pdfmetrics.getAscent(fontname, hs), head)
+
+    xs, ys = plan["xs"], plan["ys"]
+    paint_rows = ([header_row] if header_row is not None else []) + list(rows)
+    row_top, y = {}, 0.0
+    for r in paint_rows:
+        row_top[r] = y
+        y += (ys[r + 1] - ys[r]) * s
+    ox = mx + max(0.0, (aw - plan["W"] * s) / 2)
+    base_y = hpt - head_h
+
+    row_set = set(paint_rows)
+    last_row = rows[-1]
+    filled_rows = set()
+    for r in paint_rows:
+        for col in range(plan["c0"], plan["c1"] + 1):
+            if ws.cell(row=r, column=col).value not in (None, ""):
+                filled_rows.add(r)
+                break
+    for rg in ws.merged_cells.ranges:
+        if rg.min_row in row_set:
+            for r in range(rg.min_row, rg.max_row + 1):
+                filled_rows.add(r)
+
+    merged_at, hidden = {}, set()
+    for rg in ws.merged_cells.ranges:
+        merged_at[(rg.min_row, rg.min_col)] = rg
+        for r in range(rg.min_row, rg.max_row + 1):
+            for col in range(rg.min_col, rg.max_col + 1):
+                if (r, col) != (rg.min_row, rg.min_col):
+                    hidden.add((r, col))
+
+    line_w = max(0.3, 0.5 * s)
+    for r in paint_rows:
+        if r not in filled_rows:
+            continue
+        for col in range(plan["c0"], plan["c1"] + 1):
+            if (r, col) in hidden:
+                continue
+            rg = merged_at.get((r, col))
+            if rg is not None and rg.min_row not in row_set:
+                continue
+            er = min(rg.max_row, last_row) if rg else r
+            ec = rg.max_col if rg else col
+            x0 = ox + xs[col] * s
+            x1 = ox + xs[ec + 1] * s
+            y0 = row_top[r]
+            y1 = row_top.get(er + 1, y0 + (ys[er + 1] - ys[r]) * s)
+            ry = base_y - y1
+            w, h = x1 - x0, y1 - y0
+            cell = ws.cell(row=r, column=col)
+
+            bg = _rgb(cell.fill.fgColor if cell.fill else None)
+            if bg and bg != (255, 255, 255) and getattr(cell.fill, "patternType", None):
+                c.setFillColorRGB(*(v / 255.0 for v in bg))
+                c.rect(x0, ry, w, h, fill=1, stroke=0)
+
+            bc = _rgb(getattr(getattr(cell.border, "bottom", None), "color", None), GREY_LINE)
+            c.setStrokeColorRGB(*(v / 255.0 for v in bc))
+            c.setLineWidth(line_w)
+            c.rect(x0, ry, w, h, fill=0, stroke=1)
+
+            txt = _fmt(cell.value, cell)
+            if not txt:
+                continue
+            f = cell.font
+            size = max(4.0, float(f.sz or 10) * s)
+            pad = max(0.8, 1.5 * s)
+            avail_w = max(1.0, w - 2 * pad)
+            lh = size * 1.22
+            max_lines = max(1, int((h - 2 * pad) / lh))
+
+            lines = _wrap(txt, fontname, size, avail_w)
+            if "\n" not in txt:
+                one_w = pdfmetrics.stringWidth(txt, fontname, size)
+                if one_w > avail_w:
+                    fit = (avail_w * 0.97) / one_w
+                    if fit >= 0.82:
+                        size *= fit
+                        lh = size * 1.22
+                        lines = [txt]
+            if len(lines) > max_lines:
+                for k in (0.95, 0.9, 0.85, 0.8, 0.75, 0.7):
+                    nsize = size * k
+                    nlh = nsize * 1.22
+                    nmax = max(1, int((h - 2 * pad) / nlh))
+                    l2 = _wrap(txt, fontname, nsize, avail_w)
+                    if len(l2) <= nmax:
+                        size, lines, lh = nsize, l2, nlh
+                        break
+                else:
+                    lines = lines[:max_lines]
+                    sys.stderr.write("[提示] %s!%s 文本超出行高，已截断\n"
+                                     % (ws.title, cell.coordinate))
+            if not (cell.alignment and cell.alignment.wrap_text) and len(lines) > 1:
+                if h < lh * len(lines) * 1.4:
+                    lines = lines[:1]
+
+            total_h = lh * len(lines)
+            ty = y0 + max(pad, (h - total_h) / 2)
+            fg = _rgb(f.color, (0, 0, 0))
+            if fg == (0, 0, 0) and f.color and getattr(f.color, "theme", None) is not None:
+                fg = INK
+            c.setFillColorRGB(*(v / 255.0 for v in fg))
+            ascent = pdfmetrics.getAscent(fontname, size)
+            hz = (cell.alignment.horizontal if cell.alignment else None) or "center"
+            for ln in lines:
+                baseline = base_y - ty - ascent
+                tw = pdfmetrics.stringWidth(ln, fontname, size)
+                if hz == "left":
+                    tx = x0 + pad
+                elif hz == "right":
+                    tx = x1 - tw - pad
+                else:
+                    tx = x0 + max(pad, (w - tw) / 2)
+                if f.b:
+                    # 用 PDF 文本渲染模式加粗（fill+stroke），只写一份文字，
+                    # 避免偏移重绘导致复制/搜索时出现重复文本
+                    c.setLineWidth(max(0.12, size * 0.022))
+                    t = c.beginText(tx, baseline)
+                    t.setFont(fontname, size)
+                    t.setTextRenderMode(2)
+                    t.textOut(ln)
+                    c.drawText(t)
+                else:
+                    c.setFont(fontname, size)
+                    c.drawString(tx, baseline, ln)
+                ty += lh
+
+    fs = 6.5
+    c.setFont(fontname, fs)
+    c.setFillColorRGB(*(v / 255.0 for v in FOOT))
+    c.drawString(wpt - 1.30 * 72, 0.24 * 72,
+                 "第 %d 页 / 共 %d 页" % (page_no, total))
+
+
+# ----------------------------------------------------------------- 位图兜底
+def _render_sheet_raster(ws, font_path, target_w, target_h):
+    from PIL import Image, ImageDraw, ImageFont
+
+    _warn_section_merges(ws)
+    (r0, c0, r1, c1), xs0, ys0, W0, H0 = _grid(ws)
+    lw = W0 / 0.75
+    lh = H0 * (96.0 / 72.0)
+    s = min(float(target_w) / lw, float(target_h) / lh)
+    col_w = {c: (xs0[c + 1] - xs0[c]) / 0.75 * s for c in range(c0, c1 + 1)}
+    row_h = {r: (ys0[r + 1] - ys0[r]) * (96.0 / 72.0) * s for r in range(r0, r1 + 1)}
     xs, ys = {c0: 0.0}, {r0: 0.0}
     for c in range(c0, c1 + 1):
         xs[c + 1] = xs[c] + col_w[c]
@@ -191,7 +453,6 @@ def render_sheet(ws, font_path, target_w, target_h):
     img = Image.new("RGB", (W, H), "white")
     draw = ImageDraw.Draw(img)
 
-    # 空白行不画框：否则章节之间的空行会显示成一排竖线
     filled_rows = set()
     for r in range(r0, r1 + 1):
         for c in range(c0, c1 + 1):
@@ -220,8 +481,30 @@ def render_sheet(ws, font_path, target_w, target_h):
                 font_cache[key] = ImageFont.load_default()
         return font_cache[key]
 
+    def _wl(t, ft, avail_w):
+        out, cur = [], ""
+        for ch in str(t):
+            if draw.textlength(cur + ch, font=ft) <= avail_w or not cur:
+                cur += ch
+                continue
+            cut = -1
+            for i in range(len(cur) - 1, max(0, int(len(cur) * 0.55)) - 1, -1):
+                if cur[i] in BREAK_AFTER:
+                    cut = i + 1
+                    break
+            if cut > 0:
+                out.append(cur[:cut])
+                cur = cur[cut:] + ch
+            else:
+                out.append(cur)
+                cur = ch
+        out.append(cur)
+        return out
+
     line_w = max(1, int(round(s)))
     for r in range(r0, r1 + 1):
+        if r not in filled_rows:
+            continue
         for c in range(c0, c1 + 1):
             if (r, c) in hidden:
                 continue
@@ -231,8 +514,6 @@ def render_sheet(ws, font_path, target_w, target_h):
             x0, y0 = xs[c], ys[r]
             x1, y1 = xs[ec + 1], ys[er + 1]
             cell = ws.cell(row=r, column=c)
-            if r not in filled_rows:
-                continue
             bg = _rgb(cell.fill.fgColor if cell.fill else None)
             if bg and bg != (255, 255, 255) and getattr(cell.fill, "patternType", None):
                 draw.rectangle([x0, y0, x1 - 1, y1 - 1], fill=bg)
@@ -252,21 +533,20 @@ def render_sheet(ws, font_path, target_w, target_h):
             avail_w = max(1.0, x1 - x0 - 2 * pad)
             lh_px = size * 1.22
             max_lines = max(1, int((y1 - y0 - 2 * pad) / lh_px))
-            lines = _wrap(draw, txt, font, avail_w)
-            # 优先一行：缩字号 ≤18% 能放下就不折行（贴近 Excel 里「明明一行放得下」的观感）
-            one_w = 0.0 if "\n" in txt else draw.textlength(txt, font=font)
-            if one_w > avail_w:
-                fit = (avail_w * 0.97) / one_w      # 留 3% 安全余量，避免压到边框
-                if fit >= 0.82:
-                    font = _font(size * fit, f.b)
-                    lines = [txt]
-                    size *= fit
-                    lh_px = size * 1.22
-            # 仍放不下行高时再缩字号（最多 70%），而不是折行后被下一节盖住
+            lines = _wl(txt, font, avail_w)
+            if "\n" not in txt:
+                one_w = draw.textlength(txt, font=font)
+                if one_w > avail_w:
+                    fit = (avail_w * 0.97) / one_w
+                    if fit >= 0.82:
+                        font = _font(size * fit, f.b)
+                        size *= fit
+                        lh_px = size * 1.22
+                        lines = [txt]
             if len(lines) > max_lines:
                 for k in (0.95, 0.9, 0.85, 0.8, 0.75, 0.7):
                     f2 = _font(size * k, f.b)
-                    l2 = _wrap(draw, txt, f2, avail_w)
+                    l2 = _wl(txt, f2, avail_w)
                     if len(l2) <= max_lines:
                         font, lines = f2, l2
                         size *= k
@@ -276,12 +556,12 @@ def render_sheet(ws, font_path, target_w, target_h):
                     lines = lines[:max_lines]
                     sys.stderr.write("[提示] %s!%s 文本超出行高，已截断\n"
                                      % (ws.title, cell.coordinate))
-            total = lh_px * len(lines)
-            ty = y0 + max(pad, (y1 - y0 - total) / 2)
+            total_h = lh_px * len(lines)
+            ty = y0 + max(pad, (y1 - y0 - total_h) / 2)
             if not (cell.alignment and cell.alignment.wrap_text) and len(lines) > 1:
-                if (y1 - y0) < total * 1.4:
-                    lines, total = lines[:1], lh_px
-                    ty = y0 + max(pad, (y1 - y0 - total) / 2)
+                if (y1 - y0) < total_h * 1.4:
+                    lines, total_h = lines[:1], lh_px
+                    ty = y0 + max(pad, (y1 - y0 - total_h) / 2)
             for ln in lines:
                 tw = draw.textlength(ln, font=font)
                 hz = (cell.alignment.horizontal if cell.alignment else None) or "center"
@@ -297,7 +577,9 @@ def render_sheet(ws, font_path, target_w, target_h):
     return img
 
 
-def _compose(sheet_img, label, period_cn, page_no, total, land, dpi, font_path):
+def _compose_raster(sheet_img, label, period_cn, page_no, total, land, dpi, font_path):
+    from PIL import Image, ImageDraw, ImageFont
+
     wpt, hpt = (A4_PT[1], A4_PT[0]) if land else A4_PT
     pw, ph = int(wpt / 72 * dpi), int(hpt / 72 * dpi)
     page = Image.new("RGB", (pw, ph), "white")
@@ -322,9 +604,11 @@ def _compose(sheet_img, label, period_cn, page_no, total, land, dpi, font_path):
     return page, (wpt, hpt)
 
 
+# ----------------------------------------------------------------- 导出
 def export(book, out, sheets, font_path="", period_cn="",
-           orientation="auto", dpi=600, scale=None):
+           orientation="auto", dpi=600, scale=None, engine="vector"):
     font_path = find_font(font_path)
+    fontname = register_font(font_path)
     wb = openpyxl.load_workbook(book, data_only=True)
     picked = []
     for no in sheets:
@@ -334,38 +618,68 @@ def export(book, out, sheets, font_path="", period_cn="",
             raise SystemExit(1)
         picked.append((no, name))
 
-    # 逐页渲染并立即写入：600 dpi 下单页位图约 100 MB，不能全部驻留内存
-    c, dirs, prev = None, [], None
-    total = len(picked)
-    for i, (_, name) in enumerate(picked, 1):
+    if engine == "raster":
+        from reportlab.lib.utils import ImageReader
+        c, prev = None, None
+        total = len(picked)
+        meta = []
+        sys.stderr.write("[提示] raster 后端仍为「一表一页」，不参与分页；"
+                         "需要分页请用默认 vector\n")
+        for i, (no, name) in enumerate(picked, 1):
+            ws = wb[name]
+            plan = _plan(ws, orientation)
+            land = plan["land"]
+            wpt, hpt = plan["wpt"], plan["hpt"]
+            pw, ph = int(wpt / 72 * dpi), int(hpt / 72 * dpi)
+            avail_w = pw - 2 * int(PAGE_MARGIN_IN * dpi)
+            avail_h = ph - int(HEAD_IN * dpi) - int(FOOT_IN * dpi)
+            img = _render_sheet_raster(ws, font_path, avail_w, avail_h)
+            page, size = _compose_raster(img, name, period_cn, i, total, land, dpi, font_path)
+            if c is None:
+                c = pdf_canvas.Canvas(out, pagesize=size)
+                c.setTitle("铺货代销对账签章件")
+                c.setAuthor("")
+            elif size != prev:
+                c.setPageSize(size)
+            c.drawImage(ImageReader(page), 0, 0, width=size[0], height=size[1])
+            c.showPage()
+            del img, page
+            prev = size
+            meta.append({"sheet": no, "pages": 1,
+                         "orientation": "横向" if land else "纵向",
+                         "scale": round(plan["s"], 3),
+                         "font_pt": round(plan["main_pt"], 2)})
+        wb.close()
+        c.save()
+        return out, total, meta
+
+    plans = [(no, name, _plan(wb[name], orientation)) for no, name in picked]
+    total = sum(len(p["pages"]) for _, _, p in plans)
+    c, page_no = None, 0
+    for no, name, plan in plans:
         ws = wb[name]
-        lw, lh = _logical_size(ws)
-        land = (orientation == "landscape" or
-                (orientation == "auto" and lw / lh > 1.15))
-        wpt, hpt = (A4_PT[1], A4_PT[0]) if land else A4_PT
-        pw, ph = int(wpt / 72 * dpi), int(hpt / 72 * dpi)
-        avail_w = pw - 2 * int(PAGE_MARGIN_IN * dpi)
-        avail_h = ph - int(HEAD_IN * dpi) - int(FOOT_IN * dpi)
-        img = render_sheet(ws, font_path, avail_w, avail_h)
-        page, size = _compose(img, name, period_cn, i, total, land, dpi, font_path)
-        if c is None:
-            c = pdf_canvas.Canvas(out, pagesize=size)
-            c.setTitle("铺货代销对账签章件")
-            c.setAuthor("")
-        elif size != prev:
-            c.setPageSize(size)
-        c.drawImage(ImageReader(page), 0, 0, width=size[0], height=size[1])
-        c.showPage()
-        dirs.append("横向" if land else "纵向")
-        prev = size
-        del img, page
+        for idx, rows in enumerate(plan["pages"]):
+            page_no += 1
+            if c is None:
+                c = pdf_canvas.Canvas(out, pagesize=(plan["wpt"], plan["hpt"]))
+                c.setTitle("铺货代销对账签章件")
+                c.setAuthor("")
+            draw_rows(c, ws, fontname, plan, rows, page_no, total, name,
+                      period_cn, plan["hdr"][idx])
+            c.showPage()
     wb.close()
+    if c is None:
+        raise SystemExit("[中止] 没有可导出的工作表")
     c.save()
-    return out, total, dirs
+    meta = [{"sheet": no, "pages": len(p["pages"]),
+             "orientation": "横向" if p["land"] else "纵向",
+             "scale": round(p["s"], 3), "font_pt": round(p["main_pt"], 2)}
+            for no, _, p in plans]
+    return out, total, meta
 
 
 def main():
-    ap = argparse.ArgumentParser(description="活动区域快照 → 一表一页 A4 签章 PDF")
+    ap = argparse.ArgumentParser(description="活动区域 → A4 签章 PDF（宽度填满、高度切页）")
     ap.add_argument("--book", required=True)
     ap.add_argument("--out", default="")
     ap.add_argument("--sheets", default="00,01,02,08")
@@ -373,18 +687,19 @@ def main():
     ap.add_argument("--period-cn", default="")
     ap.add_argument("--orientation", default="auto",
                     choices=("auto", "landscape", "portrait"))
-    ap.add_argument("--dpi", type=int, default=600,
-                    help="输出分辨率，默认 600（印厂级）；越大越清晰、文件越大")
+    ap.add_argument("--engine", default="vector", choices=("vector", "raster"),
+                    help="vector=矢量文字（默认，宽度填满+切页）；raster=位图兜底（一表一页）")
+    ap.add_argument("--dpi", type=int, default=600, help="仅 raster 后端使用")
     a = ap.parse_args()
     if not os.path.exists(a.book):
         sys.stderr.write("[中止] 找不到工作簿：%s\n" % a.book)
         return 2
     out = a.out or os.path.join(os.path.dirname(os.path.abspath(a.book)), "对账-签章件.pdf")
     sheets = [x.strip() for x in a.sheets.split(",") if x.strip()]
-    path, n, dirs = export(a.book, out, sheets, a.font, a.period_cn,
-                           a.orientation, a.dpi)
+    path, n, meta = export(a.book, out, sheets, a.font, a.period_cn,
+                           a.orientation, a.dpi, None, a.engine)
     print(json.dumps({"pdf": os.path.abspath(path), "pages": n,
-                      "sheets": sheets, "orientation": dirs, "dpi": a.dpi,
+                      "sheets": meta, "engine": a.engine,
                       "bytes": os.path.getsize(path)}, ensure_ascii=False))
     return 0
 
