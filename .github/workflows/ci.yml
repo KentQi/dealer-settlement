@@ -40,15 +40,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install pymupdf   # 回归断言依赖；缺它会静默跳过 PDF 校验
 
       - name: 安装中文字体（签章 PDF 回归用）
         run: sudo apt-get update -qq && sudo apt-get install -y -qq fonts-wqy-zenhei
 
       - name: 校验插件与技能清单
-        run: python tools/validate.py
-
-      - name: 语法编译检查
-        run: python -m compileall -q skills examples tools
+        run: make check
 
       - name: 端到端演示（对账 → L6 复核 → 结构映射 → v1.7 门禁）
         run: make demo

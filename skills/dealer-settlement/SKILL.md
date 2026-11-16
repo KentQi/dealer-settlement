@@ -2,10 +2,10 @@
 name: dealer-settlement
 description: 铺货代销（代销 / 铺货）对账作业包：① 从经销合同识别关键字段、生成 HTML 确认页、经人工逐项确认后写入客户主档；② 阶段 G 口径确认门禁——任何业务口径未逐项确认即阻断出账，答案落 _口径确认.json 并绑定复核锁；③ 用主档 + 当期导出生成对账工作簿（00–07 结算核心 + 08 试用装与中小样四栏滚动台账 + 09 商品批次效期提示，09 由开关控制、能力完整保留）；④ 五层确定性校验 L1–L5 + L6 LLM 语义复核门禁；⑤ 结构漂移识别与映射确认；⑥ 确认单零文件操作；⑦ 增量补表（01–07 零差异）与四张打印表活动区域矢量输出（宽度填满 A4、按需分页）合成签章 PDF。当用户要求「识别合同 / 建客户档」「某月对账 / 算应结算金额 / 核对库存 / 出对账单 / 算贴花」「复核本次出账 / 验收」「怎么操作 / 需要准备什么材料」，或提到「字段名 / 表名 / 列顺序不一致」「确认页提交 / 自动定位确认单」「批次效期 / 临期预警 / 效期提醒」「试用装 / 中小样 / 配赠 / 赠品使用量」「给已有工作簿补附表 / 导出 PDF 给客户盖章」「这期不做效期 / 下期恢复」时使用。判据与校验通用，但单据版式与披露文案按「品牌方 × 经销商（示例）」场景打磨，换客户首次出账需复核版式。
 license: MIT
-compatibility: Requires Python 3.9+ with openpyxl, xlrd (>=2.0, .xls read), pdfplumber and read/write access to the workbook folder. Optional — Pillow + reportlab for the sheet-snapshot PDF (without them only PDF is skipped); Excel/WPS to open .xlsx; OCR for scanned contracts. L6 review runs in the harness LLM (scripts never call a model). Commands in bash with PowerShell equivalents.
+compatibility: Requires Python 3.9+ with openpyxl, xlrd (>=2.0, .xls read), pdfplumber and read/write access to the workbook folder. Optional — reportlab for the vector signed PDF (Pillow only for the legacy --engine raster fallback; without reportlab only PDF is skipped); Excel/WPS to open .xlsx; OCR for scanned contracts. L6 review runs in the harness LLM (scripts never call a model). Commands in bash with PowerShell equivalents.
 metadata:
   author: KentQi
-  version: "1.9.1"
+  version: "1.9.2"
 ---
 
 # 铺货代销全流程：建档 → 确认 → 对账 → 校验 → 复核
@@ -60,7 +60,7 @@ py -3 "$SKILL_DIR\scripts\recon_engine.py"
 
 【每月对账】
 三份月度导出 ──┐
-主档（六表）──┼─B1 生成配置──B2 引擎计算+自检──▶ 8 表对账工作簿
+主档（六表）──┼─B1 生成配置──B2 引擎计算+自检──▶ 9–10 表对账工作簿（09 由效期开关决定）
               │                                    │
               └── B3 确定性校验 ──▶ C3 L6 语义复核(R1–R10，必过) ──▶ B4 交付 + 期间表登记
 ```
@@ -361,7 +361,7 @@ Windows / PowerShell 见第 0 节；`--out` 属于 `load_master.py`，`recon_eng
 
 **白底与框线**：所有工作表 `showGridLines=False`、`print_options.gridLines=False`；PDF **空白行不画框**（否则章节之间的空行会显示成一排竖线），只保留有内容行/列的边框，背景纯白。**单元格文本策略**：优先一行（缩字号 ≤18% 且留 3% 安全余量）；一行放不下再按行高决定缩字号（最多 30%，**缩字号后重算可容纳行数**）或折行；断行优先落在 `·；，。、）】》` 之后，避免把「版本」拆成「版」「本）」。只有缩到 70% 仍放不下才截断，并在 stderr 点名单元格。
 
-默认四张表 `00 / 01 / 02 / 08`（与标红打印表一致）；`--engine vector`（默认）/ `raster`（旧位图兜底，不支持分页）；`--dpi` 仅 raster 使用。中文字体自动发现，也可用 `--font` 指定 TTF/TTC。命令：`python3 "$SKILL_DIR/scripts/export_pdf.py" --book <工作簿> --out <PDF> --period-cn "2026 年 10 月"`；或 `load_master.py --pdf` 让 `apply_v17.py` 在门禁通过后自动导出 `<期间>对账-签章件.pdf`。纯本地绘制，不依赖 Excel / LibreOffice。实测某 202610 工作簿四表：9.0 / 8.55 / 7.41 / 9.0pt，合计 9 页 192 KB；旧版一表一页为 4 页 4.5 MB、正文 3.97–4.90pt。
+默认四张表 `00 / 01 / 02 / 08`（与标红打印表一致）；`--engine vector`（默认）/ `raster`（旧位图兜底，不支持分页）；`--dpi` 仅 raster 使用。中文字体自动发现，也可用 `--font` 指定 TTF/TTC。命令：`python3 "$SKILL_DIR/scripts/export_pdf.py" --book <工作簿> --out <PDF> --period-cn "2026 年 10 月"`；或 `load_master.py --pdf` 让 `apply_v17.py` 在门禁通过后自动导出 `<期间>对账-签章件.pdf`。纯本地绘制，不依赖 Excel / LibreOffice。实测某 202610 工作簿四表（全横向、页宽一致）：9.0 / 9.0 / 7.41 / 9.0pt，合计 11 页 198 KB；旧版一表一页为 4 页 4.5 MB、正文 3.97–4.90pt。
 
 ## 7. 红线
 
@@ -379,7 +379,7 @@ Windows / PowerShell 见第 0 节；`--out` 属于 `load_master.py`，`recon_eng
 5. **结算判据只能是「主档·结算属性 + 商品条码」**。乙方给的「商品分类」是其 ERP 口径，甲方侧无权威对应表，原理上不能用来区分结算 / 非结算。同一品类下常常混有结算类与非结算类单品（陈列装、赠品装尤甚），按分类过滤必然误伤大量结算品。分类字段仅作展示，且须在表头标注「（乙方系统）」。
 6. **同一条码出现多笔挂账 → 硬中止**。同一产品的动销会被双算，且结转恒等式仍能凑平，事后无法发现。同理：库存同条码多行必须合计而非覆盖。
 
-**对账阶段（7–16）**
+**对账阶段（7–17）**
 
 7. **不作归因**。数据只证明「差多少」，不证明「为什么差」。禁止写「初步判断为乙方漏报」。
 8. **不臆断税率**。不知道就写「税率与发票种类以实际开票资料为准」。
@@ -415,10 +415,10 @@ Windows / PowerShell 见第 0 节；`--out` 属于 `load_master.py`，`recon_eng
 9. **AI 自行推定业务口径**：把「效期表数量」当结存、把内部出数规则印上纸面、按 30/90/180 天分档——本轮全部发生过。统一由阶段 G 问卡阻断。
 10. **表号反复交换、交叉引用错配**：删了 sheet 却留着 00 表引用。由 `sheet_map` + `verify_refs` 事前阻断。
 11. **一次性脚本注释当口径记录**：下期读不到。口径必须落 `_口径确认.json` 并归档 `_确认记录/`。
-12. **文档属性被 openpyxl 回填**：`creator` / `lastModifiedBy` 需在最后一次保存后用 zip 级补丁清除，`check_public_copy.py` 会断言。
-13. **增删行必须同步移动合并区**：`insert_rows` / `delete_rows` 不会搬合并区。漏搬会让章节标题行变成一排等宽格子，Excel 里看似正常，快照 PDF 会出现竖线（本轮补回 20 处）。生成后可用 `export_pdf` 的 stderr 提示自查。
-
+12. **文档属性被 openpyxl 回填**：`creator` / `lastModifiedBy` 需在最后一次保存后用 zip 级补丁清除（注意命名空间写在元素上的写法），`check_public_copy.py` 会断言。
+13. **增删行必须同步移动合并区**：`insert_rows` / `delete_rows` 不会搬合并区。漏搬会让章节标题行变成一排等宽格子，Excel 里看似正常，签章 PDF 会出现竖线。生成后可用 `export_pdf` 的 stderr 提示自查。
 14. **贴花标准为 0 不等于没有贴花**：0 既可能是源表明确标注为 0，也可能是旧版本、漏配或录入错误。贴花表按「条码 + 生效起止」维护，当期取到 0 时往往只是命中了一段旧区间。**遇到 0 先看生效区间，再对照源表最新版本核一遍**，确认后才可判为「无贴花」；若属漏配，应先修主档再重算对账单与签章件。
+15. **超高行 / 隐藏列 / 公式无缓存**：行高超过单页可用高度会被裁断、隐藏行列不再印进签章件、公式未缓存值会显示空白；导出时看 stderr 的点名提示。
 
 ## 9. 复核模式
 
@@ -428,7 +428,7 @@ Windows / PowerShell 见第 0 节；`--out` 属于 `load_master.py`，`recon_eng
 
 1. 生成复核包：`python3 "$SKILL_DIR/scripts/make_review_packet.py" "<工作簿.xlsx>" --master "<_主档.xlsx>" --out /tmp/复核包.json --md /tmp/复核包.md`（含哈希、figures、claims、cross_refs、redline_scan 等结构化底稿）。
 2. 由**当前 harness 的 LLM** 按 [references/复核协议.md](references/复核协议.md) 逐项复核并写出报告 JSON（schema `dealer-settlement/review-report@1`；脚本不调用外部模型）。
-3. 落盘：`python3 "$SKILL_DIR/scripts/apply_review.py" "<工作簿.xlsx>" "<报告.json>" --packet /tmp/复核包.json --apply` → 写 `08-复核记录` + `_复核记录/复核锁.json`；交付前 `--check` 必须返回「复核有效」。
+3. 落盘：`python3 "$SKILL_DIR/scripts/apply_review.py" "<工作簿.xlsx>" "<报告.json>" --packet /tmp/复核包.json --apply` → 写 `10-复核记录` + `_复核记录/复核锁.json`；交付前 `--check` 必须返回「复核有效」。
 4. 不通过 / 有阻断 → 不得交付；修正后重新出账、重新生成复核包并**重做 L6**（任何保存都会使复核锁失效）。
 
 **B. 外部工作簿复核（无复核包时，按清单直查）**
@@ -481,9 +481,9 @@ Windows / PowerShell 见第 0 节；`--out` 属于 `load_master.py`，`recon_eng
 | `scripts/apply_contract.py` | 候选 JSON 或确认单 → 主档（dry-run / `--write` / `--force`；类型校验、毫秒备份、确认单归档、写入失败提示备份位置） |
 | `scripts/make_master.py` | 生成空白主档模板（六表）；`--template` 更新 skill 自带模板 |
 | `scripts/load_master.py` | 主档 → 引擎配置（`--pay` 缺省取合同付款日；`--strict` 严格预检；`--out` 指定输出） |
-| `scripts/recon_engine.py` | 对账引擎（8 表 + 贴花模块 + L1–L5 确定性校验；只读 `RECON_CFG`；覆盖保护写 `_v2`） |
+| `scripts/recon_engine.py` | 对账引擎（9–10 表 + 贴花模块 + L1–L5 确定性校验；只读 `RECON_CFG`；覆盖保护写 `_v2`） |
 | `scripts/make_review_packet.py` | 工作簿 → 复核包（packet JSON/MD；含哈希、figures、claims、cross_refs、redline_scan） |
-| `scripts/apply_review.py` | 复核报告校验与落盘（默认 dry-run；`--apply` 写 `08-复核记录` + 复核锁；`--check` 交付前校验） |
+| `scripts/apply_review.py` | 复核报告校验与落盘（默认 dry-run；`--apply` 写 `10-复核记录` + 复核锁；`--check` 交付前校验） |
 | `scripts/review_common.py` | 复核层共享常量（schema / 枚举 / R1–R10 清单 / 哈希工具） |
 | `scripts/inspect_schema.py` | 结构探查（只读）：表名 / 字段名 / 顺序漂移与映射建议 |
 | `scripts/apply_mapping.py` | 映射确认与主档修复（dry-run 默认；`--write --confirmed-by`；`--fix-master` / `--fix-order`） |
