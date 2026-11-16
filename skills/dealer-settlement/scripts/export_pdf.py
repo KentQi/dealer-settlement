@@ -224,10 +224,20 @@ def _header_rows(ws, r0, c0, r1, c1):
     if m:
         a, b = int(m.group(1)), int(m.group(2))
         rows = [r for r in range(max(a, r0), min(b, r1) + 1)]
+        # print_title_rows 也可能被设成文档标题行（如 2:4），必须含表头关键词才采信
         if rows:
-            return rows
+            blob = "".join(re.sub(r"\s+", "", str(ws.cell(rr, c).value or ""))
+                           for rr in rows for c in range(c0, c1 + 1))
+            if any(k in blob for k in HEADER_KEYS):
+                return rows
     out = []
     for r in range(r0, r1 + 1):
+        a_val = ws.cell(row=r, column=c0).value
+        # 明细行的 A 列是序号数字，不可能是表头
+        if isinstance(a_val, (int, float)):
+            continue
+        if isinstance(a_val, str) and a_val.strip().isdigit():
+            continue
         cells = [ws.cell(row=r, column=col) for col in range(c0, c1 + 1)]
         vals = [c.value for c in cells if c.value not in (None, "")]
         if len(vals) < 2:
@@ -236,8 +246,11 @@ def _header_rows(ws, r0, c0, r1, c1):
         flat = re.sub(r"\s+", "", text)      # 「合　计」中间是全角空格，先归一化
         if any(k in flat for k in SKIP_KEYS):
             continue
-        nb = sum(1 for c in cells if c.font is not None and c.font.b)
-        if nb >= max(2, len(cells) // 2) and any(k in flat for k in HEADER_KEYS):
+        # 只按「有值单元格」算加粗比例：合并表头在 12 列里可能只有 4 格有值
+        nval = len(vals)
+        nb = sum(1 for c in cells
+                 if c.value not in (None, "") and c.font is not None and c.font.b)
+        if nb >= max(2, int(nval * 0.6)) and any(k in flat for k in HEADER_KEYS):
             out.append(r)
     return out
 
