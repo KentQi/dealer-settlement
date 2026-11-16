@@ -210,8 +210,13 @@ def main():
                 check(len(_pg.get_images()) == 0, "第 %d 页为纯矢量（无位图）" % (_i + 1))
                 check(len(_pg.get_text().strip()) > 20, "第 %d 页含可提取文本" % (_i + 1))
             check(any("序号" in _pg.get_text() for _pg in d), "至少一页含表头「序号」")
-            _sizes = {(round(_p.rect.width), round(_p.rect.height)) for _p in d}
-            check(len(_sizes) == 1, "所有页面尺寸一致（宽度一致），实际 %s" % _sizes)
+            _w = {round(_p.rect.width, 2) for _p in d}
+            _h = {round(_p.rect.height, 2) for _p in d}
+            check(len(_w) == 1 and len(_h) == 1,
+                  "所有页尺寸一致，实际 %s x %s" % (_w, _h))
+            _cont = sum(1 for _p in d
+                        if "（续）" in _p.get_text() and "序号" in _p.get_text())
+            check(_cont >= 1, "续页重复表头：至少一页「（续）」含「序号」")
             d.close()
         except ImportError:
             print("  · 跳过页数校验（未装 pymupdf）")
